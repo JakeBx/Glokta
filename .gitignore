@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *.pyo
 
+# MacOS
+.DS_Store
+
 # Virtual environments
 venv/
 .venv/

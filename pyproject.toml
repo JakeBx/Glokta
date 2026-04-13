@@ -16,7 +16,7 @@ dependencies = [
     "pydantic-settings>=2.2",
     "celery[redis]>=5.4",
     "redis>=5.0",
-    "gradio>=4.31",
+    "gradio>=4.31,<6",
     "httpx>=0.27",
     "python-dotenv>=1.0",
 ]

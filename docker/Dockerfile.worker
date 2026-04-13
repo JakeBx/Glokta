@@ -3,12 +3,10 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # System deps — Rust/Cargo required to compile base2048 (garak transitive dep)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
-    git \
-    rustc \
-    cargo \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       -o Acquire::Retries=5 \
+       gcc libpq-dev git rustc cargo \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml ./

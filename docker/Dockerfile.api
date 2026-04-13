@@ -3,9 +3,10 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       -o Acquire::Retries=5 \
+       gcc libpq-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy source and package metadata together — src/ must exist for setuptools
