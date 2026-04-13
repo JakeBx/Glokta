@@ -2,19 +2,20 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies (garak needs git at install time)
+# System deps — Rust/Cargo required to compile base2048 (garak transitive dep)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     git \
+    rustc \
+    cargo \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy source and package metadata together — src/ must exist for setuptools
-# to scan packages during install, so we can't split this for layer caching.
 COPY pyproject.toml ./
 COPY src/ ./src/
 
-RUN pip install --no-cache-dir ".[dev]"
+# Install core deps + worker extra (garak) + dev tools
+RUN pip install --no-cache-dir ".[worker,dev]"
 
 ENV PYTHONUNBUFFERED=1
 
