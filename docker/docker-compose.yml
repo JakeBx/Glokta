@@ -1,0 +1,106 @@
+# GarakBoard — Docker Compose stack
+# Usage: docker compose -f docker/docker-compose.yml up
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: garakboard
+      POSTGRES_USER: garakboard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-garakboard}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U garakboard -d garakboard"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://garakboard:${POSTGRES_PASSWORD:-garakboard}@postgres:5432/garakboard
+      REDIS_URL: redis://redis:6379/0
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      API_HOST: "0.0.0.0"
+      API_PORT: "8000"
+      API_BASE_URL: http://api:8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://garakboard:${POSTGRES_PASSWORD:-garakboard}@postgres:5432/garakboard
+      REDIS_URL: redis://redis:6379/0
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_RPM_LIMIT: ${OPENROUTER_RPM_LIMIT:-14}
+      GARAK_PARALLEL_ATTEMPTS: ${GARAK_PARALLEL_ATTEMPTS:-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+    restart: unless-stopped
+    command: >
+      celery -A garakboard.worker.celery_app:celery_app beat
+      --loglevel=info
+      --scheduler celery.beat:PersistentScheduler
+    environment:
+      DATABASE_URL: postgresql://garakboard:${POSTGRES_PASSWORD:-garakboard}@postgres:5432/garakboard
+      REDIS_URL: redis://redis:6379/0
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    restart: unless-stopped
+    command: ["python", "-m", "garakboard.frontend.gradio_app"]
+    environment:
+      DATABASE_URL: postgresql://garakboard:${POSTGRES_PASSWORD:-garakboard}@postgres:5432/garakboard
+      REDIS_URL: redis://redis:6379/0
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      API_BASE_URL: http://api:8000
+      GRADIO_SERVER_PORT: "7860"
+    ports:
+      - "7860:7860"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:

@@ -1,0 +1,38 @@
+# Bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Conda
+.conda/
+
+# Pytest and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment files
+.env
+
+# IDE
+.idea/
+.vscode/
+!.vscode/settings.json
+plans/
+
+# garak output
+*.jsonl
+garak_runs/
+
+# Docker volumes
+pgdata/
+
+# Distribution
+dist/
+build/
+*.egg-info/
