@@ -1,111 +1,72 @@
-"""Redis-backed token bucket rate limiter for per-model rate limiting."""
+"""Redis-backed per-model run lock for garak job serialisation."""
 
 import redis
 
 from garakboard.config import settings
 
 
-class TokenBucket:
+class RunLock:
     """
-    Redis-backed token bucket for per-model rate limiting.
+    Redis-backed per-model run lock using INCR/EXPIRE.
 
-    Uses a Redis key per model_name. The key stores the remaining token count.
-    On first access (key missing), the bucket is initialised to capacity.
-    The key has a TTL of 60 seconds — when it expires, the bucket refills.
+    Ensures at most one garak run executes per model at a time across
+    multiple concurrent Celery workers. Uses INCR atomicity — no Lua,
+    no WATCH/MULTI/EXEC pipelines.
 
-    Designed for use with multiple concurrent Celery workers.
-    All operations are atomic via WATCH/MULTI/EXEC pipelines.
+    The lock key carries a TTL equal to the garak timeout so it
+    self-heals if a worker dies without reaching the finally block.
     """
 
-    def __init__(self, redis_client, capacity: int = 15, window_seconds: int = 60):
+    def __init__(self, redis_client, timeout: int = 3600):
         """
         Args:
             redis_client: A redis.Redis (or fakeredis.FakeRedis) client instance
-            capacity: Maximum tokens per window (default 15 — 15 RPM headroom under 20 RPM limit)
-            window_seconds: Token refill window in seconds (default 60)
+            timeout: Lock TTL in seconds — should match garak_timeout_seconds
         """
         self.redis = redis_client
-        self.capacity = capacity
-        self.window_seconds = window_seconds
+        self.timeout = timeout
 
     def _key(self, model_name: str) -> str:
-        """Generate the Redis key for a model's bucket."""
-        return f"rate_limit:{model_name}"
+        return f"run_lock:{model_name}"
 
     def acquire(self, model_name: str) -> bool:
         """
-        Attempt to acquire one token for the given model.
+        Attempt to acquire the run lock for a model.
 
-        Uses WATCH/MULTI/EXEC to ensure atomicity across concurrent workers.
+        Returns True if the lock was acquired (no other run is active).
+        Returns False if another run is already active for this model.
 
-        Args:
-            model_name: The OpenRouter model identifier (used as bucket key)
-
-        Returns:
-            True if a token was acquired (request can proceed)
-            False if the bucket is empty (caller should wait)
+        On concurrent acquire attempts:
+          - INCR is atomic, so exactly one worker gets count=1.
+          - All others get count>1, DECR to undo, and return False.
+          - EXPIRE is set on every call so the key always has a TTL,
+            even if the previous holder crashed before setting one.
         """
         key = self._key(model_name)
+        count = self.redis.incr(key)
+        self.redis.expire(key, self.timeout)
+        if count > 1:
+            self.redis.decr(key)
+            return False
+        return True
 
-        # Use a pipeline with WATCH for optimistic locking
-        with self.redis.pipeline() as pipe:
-            while True:
-                try:
-                    # Watch the key for changes
-                    pipe.watch(key)
-
-                    # Get current value
-                    current = pipe.get(key)
-                    
-                    if current is None:
-                        # Key doesn't exist — initialise bucket at capacity - 1
-                        # (we're consuming 1 token now)
-                        pipe.multi()
-                        pipe.set(key, self.capacity - 1)
-                        pipe.expire(key, self.window_seconds)
-                        pipe.execute()
-                        return True
-                    else:
-                        current_val = int(current)
-                        if current_val <= 0:
-                            # Bucket empty — give up
-                            pipe.unwatch()
-                            return False
-                        
-                        # Decrement and refresh TTL
-                        pipe.multi()
-                        pipe.decr(key)
-                        pipe.expire(key, self.window_seconds)
-                        pipe.execute()
-                        return True
-
-                except redis.WatchError:
-                    # Another client modified the key — retry
-                    continue
-
-    def remaining(self, model_name: str) -> int:
-        """
-        Return the number of tokens remaining for a model.
-
-        Returns capacity if the key does not exist yet (bucket full).
-        """
-        value = self.redis.get(self._key(model_name))
-        if value is None:
-            return self.capacity
-        return int(value)
-
-    def reset(self, model_name: str) -> None:
-        """
-        Reset (delete) the bucket for a model. Useful for testing.
-        """
+    def release(self, model_name: str) -> None:
+        """Release the lock by deleting the key."""
         self.redis.delete(self._key(model_name))
 
+    def reset(self, model_name: str) -> None:
+        """Alias for release. Useful in tests."""
+        self.release(model_name)
 
-def get_redis_client():
+
+def get_redis_client() -> redis.Redis:
     """Return a configured Redis client from settings."""
     return redis.from_url(settings.redis_url)
 
 
-def get_token_bucket(capacity: int = 15) -> TokenBucket:
-    """Return a TokenBucket using the production Redis client."""
-    return TokenBucket(redis_client=get_redis_client(), capacity=capacity)
+def get_run_lock(timeout: int | None = None) -> RunLock:
+    """Return a RunLock using the production Redis client."""
+    return RunLock(
+        redis_client=get_redis_client(),
+        timeout=timeout if timeout is not None else settings.garak_timeout_seconds,
+    )

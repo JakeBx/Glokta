@@ -21,6 +21,46 @@ class IngestResult:
     skipped_count: int
 
 
+def _extract_prompt_text(prompt) -> str:
+    """
+    Extract plain text from a garak prompt.
+
+    Handles both the legacy format (plain string) and the garak >=0.14
+    Conversation format (dict with a 'turns' list).
+    """
+    if isinstance(prompt, str):
+        return prompt
+    if isinstance(prompt, dict):
+        turns = prompt.get("turns") or []
+        if turns:
+            content = turns[0].get("content", {})
+            if isinstance(content, dict):
+                return content.get("text", "")
+            return str(content)
+    return str(prompt) if prompt is not None else ""
+
+
+def _extract_response_text(outputs) -> str | None:
+    """
+    Extract plain text from garak outputs.
+
+    Handles both the legacy format (plain string or None) and the garak >=0.14
+    format (list of dicts with a 'text' key).
+    """
+    if outputs is None:
+        return None
+    if isinstance(outputs, list):
+        if not outputs:
+            return None
+        first = outputs[0]
+        if isinstance(first, dict):
+            return first.get("text")
+        return str(first)
+    if isinstance(outputs, str):
+        return outputs
+    return None
+
+
 def parse_eval_entry(entry: dict, run_id: str) -> ProbeResult:
     """
     Parse a garak 'eval' JSONL entry into a ProbeResult ORM object.
@@ -48,13 +88,16 @@ def parse_eval_entry(entry: dict, run_id: str) -> ProbeResult:
 
     run_uuid = uuid.UUID(run_id)
 
+    # garak >=0.14 uses 'fails'; older versions used 'failed'
+    fail_count = entry.get("fails", entry.get("failed", 0)) or 0
+
     return ProbeResult(
         run_id=run_uuid,
         probe_name=probe_name,
         probe_category=probe_category,
         detector=entry.get("detector", ""),
-        pass_count=entry.get("passed", 0),
-        fail_count=entry.get("failed", 0),
+        pass_count=entry.get("passed", 0) or 0,
+        fail_count=fail_count,
         score=entry.get("score"),
     )
 
@@ -76,14 +119,15 @@ def parse_attempt_entry(entry: dict, run_id: str) -> Attempt:
     if entry.get("entry_type") != "attempt":
         raise ValueError(f"Expected entry_type 'attempt', got '{entry.get('entry_type')}'")
 
-    probe = entry.get("probe", "")
+    # garak >=0.14 uses 'probe_classname'; older versions used 'probe'
+    probe = entry.get("probe_classname") or entry.get("probe", "")
     run_uuid = uuid.UUID(run_id)
 
     return Attempt(
         run_id=run_uuid,
         probe_name=probe,
-        prompt=entry.get("prompt"),
-        response=entry.get("response"),
+        prompt=_extract_prompt_text(entry.get("prompt")),
+        response=_extract_response_text(entry.get("outputs") or entry.get("response")),
         detector_outcome=entry.get("detector_results", {}),
     )
 

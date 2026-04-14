@@ -9,7 +9,7 @@ from celery.exceptions import Retry
 
 from garakboard.worker.celery_app import celery_app
 from garakboard.worker.garak_runner import build_garak_config, run_garak
-from garakboard.worker.rate_limiter import get_token_bucket
+from garakboard.worker.rate_limiter import get_run_lock
 from garakboard.ingest.jsonl_parser import ingest_jsonl_file
 from garakboard.database import SessionLocal
 from garakboard.models import Run, Model
@@ -37,7 +37,7 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
         pending → running (on task start)
         running → complete (on success)
         running → failed (on unrecoverable error)
-        running → pending (on 429 retry — Celery will re-queue)
+        running → pending (on retry — model already running, or 429 from OpenRouter)
 
     Args:
         run_id: UUID string of the Run record in the database
@@ -48,9 +48,12 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
         dict with probe_results_count, attempts_count
 
     Raises:
-        Retry: On 429 rate limit responses (exponential backoff)
+        Retry: When another run is already active for this model, or on 429
     """
     db = SessionLocal()
+    lock = get_run_lock()
+    acquired = False
+
     try:
         # 1. Transition to running
         run = db.query(Run).filter(Run.id == run_id).first()
@@ -62,33 +65,41 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
         run.started_at = datetime.now(timezone.utc)
         db.commit()
 
-        # 2. Build garak config and run in temp directory
+        # 2. Acquire per-model run lock — only one garak run per model at a time
+        if not lock.acquire(model_name):
+            logger.warning(f"Run already active for {model_name}, requeueing...")
+            run.status = "pending"
+            db.commit()
+            raise self.retry(exc=Exception("Model already running"), countdown=30)
+        acquired = True
+
+        # 3. Build garak config and run in temp directory
         with tempfile.TemporaryDirectory() as output_dir:
             config = build_garak_config(
                 model_name=model_name,
                 probe_categories=probe_categories,
                 output_dir=output_dir,
-                rpm_limit=settings.openrouter_rpm_limit,
                 parallel_attempts=settings.garak_parallel_attempts,
+                rpm_limit=settings.openrouter_rpm_limit,
             )
 
-            # Acquire rate-limit token — retry with backoff if bucket is empty
-            bucket = get_token_bucket(capacity=settings.openrouter_rpm_limit + 1)
-            if not bucket.acquire(model_name):
-                logger.warning(f"Rate limit bucket empty for {model_name}, retrying...")
-                run.status = "pending"
-                db.commit()
-                countdown = 60  # wait for bucket to refill
-                raise self.retry(exc=Exception("Rate limit bucket empty"), countdown=countdown)
-
             try:
-                jsonl_path = run_garak(config, settings.openrouter_api_key)
+                jsonl_path = run_garak(config, settings.openrouter_api_key, timeout=settings.garak_timeout_seconds)
             except Exception as exc:
-                # Check for 429 rate limit error in exception message
-                if "429" in str(exc) or "rate limit" in str(exc).lower():
+                # Check for 429 rate limit in exception message or garak's captured stdout/stderr
+                exc_stdout = getattr(exc, "stdout", None)
+                exc_stderr = getattr(exc, "stderr", None)
+                stdout_str = exc_stdout.decode("utf-8", errors="replace") if isinstance(exc_stdout, bytes) else str(exc_stdout or "")
+                stderr_str = exc_stderr.decode("utf-8", errors="replace") if isinstance(exc_stderr, bytes) else str(exc_stderr or "")
+                exc_text = " ".join([str(exc), stdout_str, stderr_str])
+                if "429" in exc_text or "rate limit" in exc_text.lower() or "rate-limited" in exc_text.lower():
                     logger.warning(f"Rate limit hit for run {run_id}, retrying...")
                     run.status = "pending"
                     db.commit()
+                    # Release lock before requeueing — no point holding the model slot
+                    # during the countdown. The retried task will re-acquire.
+                    acquired = False
+                    lock.release(model_name)
                     countdown = 30 * (2 ** self.request.retries)
                     raise self.retry(exc=exc, countdown=countdown)
 
@@ -99,11 +110,11 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
                 db.commit()
                 return {"error": str(exc)}
 
-            # 3. Ingest JSONL output
+            # 4. Ingest JSONL output
             result = ingest_jsonl_file(jsonl_path, run_id, db)
             db.commit()
 
-        # 4. Mark run as complete
+        # 5. Mark run as complete
         run.status = "complete"
         run.completed_at = datetime.now(timezone.utc)
         db.commit()
@@ -124,6 +135,7 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
     except Exception as exc:
         logger.error(f"Unexpected error in run_scan for {run_id}: {exc}")
         try:
+            db.rollback()
             run = db.query(Run).filter(Run.id == run_id).first()
             if run:
                 run.status = "failed"
@@ -135,4 +147,6 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
             )
         raise
     finally:
+        if acquired:
+            lock.release(model_name)
         db.close()

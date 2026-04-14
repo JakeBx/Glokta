@@ -23,8 +23,9 @@ class Settings(BaseSettings):
 
     # OpenRouter
     openrouter_api_key: str = ""
-    openrouter_rpm_limit: int = 14
-    garak_parallel_attempts: int = 1
+    openrouter_rpm_limit: int = 200
+    garak_parallel_attempts: int = 2
+    garak_timeout_seconds: int = 7200
 
     # API server
     api_host: str = "0.0.0.0"

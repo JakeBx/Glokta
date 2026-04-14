@@ -1,5 +1,8 @@
 FROM python:3.11-slim
 
+# Install uv (much faster than pip)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 WORKDIR /app
 
 # Install system dependencies
@@ -9,12 +12,14 @@ RUN apt-get update \
        gcc libpq-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy source and package metadata together — src/ must exist for setuptools
-# to scan packages during install, so we can't split this for layer caching.
+# ── Dependency layer (cached until pyproject.toml changes) ───────────
 COPY pyproject.toml ./
-COPY src/ ./src/
+RUN mkdir -p src/garakboard && touch src/garakboard/__init__.py
+RUN uv pip install --system --no-cache ".[dev]"
 
-RUN pip install --no-cache-dir ".[dev]"
+# ── Application layer ────────────────────────────────────────────────
+COPY src/ ./src/
+RUN uv pip install --system --no-deps --no-cache --reinstall-package garakboard .
 
 ENV PYTHONUNBUFFERED=1
 

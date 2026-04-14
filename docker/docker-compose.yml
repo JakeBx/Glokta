@@ -61,12 +61,13 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.worker
+    container_name: garakboard-worker
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://garakboard:${POSTGRES_PASSWORD:-garakboard}@postgres:5432/garakboard
       REDIS_URL: redis://redis:6379/0
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
-      OPENROUTER_RPM_LIMIT: ${OPENROUTER_RPM_LIMIT:-14}
+      OPENROUTER_RPM_LIMIT: ${OPENROUTER_RPM_LIMIT:-200}
       GARAK_PARALLEL_ATTEMPTS: ${GARAK_PARALLEL_ATTEMPTS:-1}
     depends_on:
       postgres:
@@ -107,6 +108,24 @@ services:
       - "7860:7860"
     depends_on:
       api:
+        condition: service_healthy
+
+  flower:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+    restart: unless-stopped
+    command: >
+      celery -A garakboard.worker.celery_app:celery_app flower
+      --port=5555
+    environment:
+      DATABASE_URL: postgresql://garakboard:${POSTGRES_PASSWORD:-garakboard}@postgres:5432/garakboard
+      REDIS_URL: redis://redis:6379/0
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
         condition: service_healthy
 
 volumes:

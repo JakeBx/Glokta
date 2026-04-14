@@ -10,17 +10,16 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-# Maximum seconds a single garak run is allowed to take before the worker
-# treats it as a hung process and raises subprocess.TimeoutExpired.
-GARAK_TIMEOUT_SECONDS = 600
+# Default timeout — overridden by settings.garak_timeout_seconds at call sites.
+GARAK_TIMEOUT_SECONDS = 3600
 
 
 def build_garak_config(
     model_name: str,
     probe_categories: list[str],
     output_dir: str,
-    rpm_limit: int = 14,
     parallel_attempts: int = 1,
+    rpm_limit: int | None = None,
 ) -> dict:
     """
     Build a garak configuration dict suitable for writing as YAML.
@@ -29,8 +28,8 @@ def build_garak_config(
         model_name: OpenRouter model name e.g. 'openrouter/meta-llama/llama-3-8b-instruct:free'
         probe_categories: List of probe category names e.g. ['encoding', 'malwaregen']
         output_dir: Directory where garak should write its JSONL output
-        rpm_limit: Requests per minute limit (default 14)
         parallel_attempts: Number of parallel attempts (default 1)
+        rpm_limit: Optional rate limit in requests per minute for the generator
 
     Returns:
         dict suitable for yaml.dump()
@@ -38,27 +37,32 @@ def build_garak_config(
     # If probe_categories is empty, use a default subset safe for testing
     probes = probe_categories if probe_categories else ["encoding"]
 
-    return {
-        "run": {
+    config: dict = {
+        "system": {
             "parallel_attempts": parallel_attempts,
         },
         "plugins": {
             "model_type": "litellm",
             "model_name": model_name,
-            "probes": probes,
-            "generators": {
-                "litellm": {
-                    "rpm": rpm_limit,
-                }
-            },
+            "probe_spec": ",".join(probes),
         },
         "reporting": {
-            "output_dir": output_dir,
+            "report_dir": output_dir,
         },
     }
 
+    # Add rpm_limit to generator config if provided
+    if rpm_limit is not None:
+        config["plugins"]["generators"] = {
+            "litellm": {
+                "rpm": rpm_limit,
+            },
+        }
 
-def run_garak(config: dict, api_key: str) -> str:
+    return config
+
+
+def run_garak(config: dict, api_key: str, timeout: int = GARAK_TIMEOUT_SECONDS) -> str:
     """
     Write a garak YAML config and run garak as a subprocess.
 
@@ -74,7 +78,7 @@ def run_garak(config: dict, api_key: str) -> str:
         subprocess.TimeoutExpired: If garak does not complete within GARAK_TIMEOUT_SECONDS
         FileNotFoundError: If the expected JSONL output file is not found after run
     """
-    output_dir = config["reporting"]["output_dir"]
+    output_dir = config["reporting"]["report_dir"]
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".yaml", delete=False
@@ -92,7 +96,7 @@ def run_garak(config: dict, api_key: str) -> str:
             check=True,
             capture_output=True,
             text=True,
-            timeout=GARAK_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
     except subprocess.CalledProcessError as exc:
         logger.error(
@@ -105,15 +109,15 @@ def run_garak(config: dict, api_key: str) -> str:
     except subprocess.TimeoutExpired as exc:
         logger.error(
             "garak timed out after %d seconds for config %s",
-            GARAK_TIMEOUT_SECONDS,
+            timeout,
             config_path,
         )
         raise
     finally:
         os.unlink(config_path)
 
-    # Find the JSONL output file garak wrote
-    output_files = list(Path(output_dir).glob("*.jsonl"))
+    # Find the JSONL output file garak wrote (use rglob for recursive search)
+    output_files = list(Path(output_dir).rglob("*.jsonl"))
     if not output_files:
         raise FileNotFoundError(
             f"No JSONL output file found in {output_dir} after garak run"

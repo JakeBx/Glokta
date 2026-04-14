@@ -1,5 +1,8 @@
 FROM python:3.11-slim
 
+# Install uv (much faster than pip)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 WORKDIR /app
 
 # System deps — Rust/Cargo required to compile base2048 (garak transitive dep)
@@ -9,11 +12,14 @@ RUN apt-get update \
        gcc libpq-dev git rustc cargo \
     && rm -rf /var/lib/apt/lists/*
 
+# ── Dependency layer (cached until pyproject.toml changes) ───────────
 COPY pyproject.toml ./
-COPY src/ ./src/
+RUN mkdir -p src/garakboard && touch src/garakboard/__init__.py
+RUN uv pip install --system --no-cache ".[worker,dev]"
 
-# Install core deps + worker extra (garak) + dev tools
-RUN pip install --no-cache-dir ".[worker,dev]"
+# ── Application layer ────────────────────────────────────────────────
+COPY src/ ./src/
+RUN uv pip install --system --no-deps --no-cache --reinstall-package garakboard .
 
 ENV PYTHONUNBUFFERED=1
 
