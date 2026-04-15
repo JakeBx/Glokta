@@ -17,6 +17,9 @@ COPY pyproject.toml ./
 RUN mkdir -p src/garakboard && touch src/garakboard/__init__.py
 RUN uv pip install --system --no-cache ".[worker,dev]"
 
+# Pre-warm garak's plugin cache to avoid race conditions during concurrent subprocess launches
+RUN python -c "from garak._plugins import PluginCache; PluginCache.instance()" || true
+
 # ── Application layer ────────────────────────────────────────────────
 COPY src/ ./src/
 RUN uv pip install --system --no-deps --no-cache --reinstall-package garakboard .
@@ -24,4 +27,4 @@ RUN uv pip install --system --no-deps --no-cache --reinstall-package garakboard 
 ENV PYTHONUNBUFFERED=1
 
 # Default: run the Celery worker
-CMD ["celery", "-A", "garakboard.worker.celery_app:celery_app", "worker", "--loglevel=info", "--concurrency=2"]
+CMD ["celery", "-A", "garakboard.worker.celery_app:celery_app", "worker", "--loglevel=info", "--concurrency=1"]

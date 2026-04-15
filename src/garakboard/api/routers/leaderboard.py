@@ -1,5 +1,6 @@
 """Leaderboard API router."""
 
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,6 +17,30 @@ from garakboard.schemas import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+# DEBUG: diagnostic data for troubleshooting
+def get_db_diagnostics(db: Session) -> dict:
+    """Return diagnostic info about runs and probe_results in the database."""
+    total_runs = db.query(Run).count()
+    status_counts = dict(
+        db.query(Run.status, func.count(Run.id))
+        .group_by(Run.status)
+        .all()
+    )
+    complete_runs = db.query(Run).filter(Run.status == "complete").count()
+    total_probe_results = db.query(ProbeResult).count()
+    runs_with_results = (
+        db.query(func.count(func.distinct(ProbeResult.run_id)))
+        .scalar() or 0
+    )
+    return {
+        "total_runs": total_runs,
+        "status_counts": status_counts,
+        "complete_runs": complete_runs,
+        "total_probe_results": total_probe_results,
+        "runs_with_probe_results": runs_with_results,
+    }
 
 
 def _latest_run_subquery():
@@ -66,6 +91,17 @@ def get_leaderboard(
     db: Session = Depends(get_db),
 ) -> LeaderboardResponse:
     """Paginated leaderboard — one row per (model, probe_category) from each model's most recent complete run."""
+    # DEBUG: Log diagnostics to help troubleshoot missing data
+    diagnostics = get_db_diagnostics(db)
+    logger.warning(
+        f"[LEADERBOARD DEBUG] DB state: "
+        f"total_runs={diagnostics['total_runs']}, "
+        f"status_counts={diagnostics['status_counts']}, "
+        f"complete_runs={diagnostics['complete_runs']}, "
+        f"total_probe_results={diagnostics['total_probe_results']}, "
+        f"runs_with_probe_results={diagnostics['runs_with_probe_results']}"
+    )
+
     latest_run = _latest_run_subquery()
 
     # Base aggregation: join probe_results to the most-recent-run subquery

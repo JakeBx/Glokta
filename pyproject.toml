@@ -26,6 +26,7 @@ dependencies = [
 # one of its transitive deps (base2048) and is not used by the API or frontend.
 worker = [
     "garak>=0.9",
+    "flower>=2.0",
 ]
 dev = [
     "pytest>=8.2",

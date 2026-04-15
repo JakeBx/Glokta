@@ -111,6 +111,35 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
                 return {"error": str(exc)}
 
             # 4. Ingest JSONL output
+            logger.info(f"[DEBUG] JSONL path for run {run_id}: {jsonl_path}")
+            # Read and log JSONL entry types for diagnostics
+            try:
+                import json
+                entry_types = set()
+                eval_count = 0
+                attempt_count = 0
+                with open(jsonl_path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entry = json.loads(line)
+                            entry_type = entry.get('entry_type', 'unknown')
+                            entry_types.add(entry_type)
+                            if entry_type == 'eval':
+                                eval_count += 1
+                            elif entry_type == 'attempt':
+                                attempt_count += 1
+                        except json.JSONDecodeError:
+                            pass
+                logger.warning(
+                    f"[DEBUG] Run {run_id} JSONL analysis: "
+                    f"entry_types={entry_types}, eval_count={eval_count}, attempt_count={attempt_count}"
+                )
+            except Exception as e:
+                logger.warning(f"[DEBUG] Could not analyze JSONL file: {e}")
+
             result = ingest_jsonl_file(jsonl_path, run_id, db)
             db.commit()
 

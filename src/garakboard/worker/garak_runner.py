@@ -42,22 +42,14 @@ def build_garak_config(
             "parallel_attempts": parallel_attempts,
         },
         "plugins": {
-            "model_type": "litellm",
-            "model_name": model_name,
+            "target_type": "litellm",
+            "target_name": model_name,
             "probe_spec": ",".join(probes),
         },
         "reporting": {
             "report_dir": output_dir,
         },
     }
-
-    # Add rpm_limit to generator config if provided
-    if rpm_limit is not None:
-        config["plugins"]["generators"] = {
-            "litellm": {
-                "rpm": rpm_limit,
-            },
-        }
 
     return config
 
@@ -90,7 +82,7 @@ def run_garak(config: dict, api_key: str, timeout: int = GARAK_TIMEOUT_SECONDS) 
         env = os.environ.copy()
         env["OPENROUTER_API_KEY"] = api_key
 
-        subprocess.run(
+        result = subprocess.run(
             ["garak", "--config", config_path],
             env=env,
             check=True,
@@ -98,6 +90,11 @@ def run_garak(config: dict, api_key: str, timeout: int = GARAK_TIMEOUT_SECONDS) 
             text=True,
             timeout=timeout,
         )
+        # Always log garak output for diagnostics
+        if result.stdout:
+            logger.info("garak stdout:\n%s", result.stdout[-2000:])
+        if result.stderr:
+            logger.info("garak stderr:\n%s", result.stderr[-2000:])
     except subprocess.CalledProcessError as exc:
         logger.error(
             "garak exited with code %d.\nstdout: %s\nstderr: %s",
