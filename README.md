@@ -86,7 +86,7 @@ Open **http://localhost:7860** to access the dashboard.
 | Gradio Dashboard | http://localhost:7860 |
 | FastAPI | http://localhost:8000 |
 | Swagger UI | http://localhost:8000/docs |
-| PostgreSQL | localhost:5432 (user: garakboard, pass: garakboard) |
+| PostgreSQL | localhost:5433 (user: garakboard, pass: set via `POSTGRES_PASSWORD` env) |
 | Redis | localhost:6379 |
 
 ## Running the Test Suite

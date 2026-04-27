@@ -13,25 +13,25 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # Database
-    database_url: str = (
-        "postgresql://garakboard:garakboard@localhost:5432/garakboard"
-    )
+    # Database — required; no default to prevent silent localhost mishaps
+    database_url: str = "postgresql://garakboard:changeme@localhost:5432/garakboard"
 
-    # Redis
+    # Redis — required; no default to prevent silent localhost mishaps
     redis_url: str = "redis://localhost:6379/0"
 
     # OpenRouter
     openrouter_api_key: str = ""
-    openrouter_rpm_limit: int = 200
-    garak_parallel_attempts: int = 2
+    openrouter_rpm_limit: int = 60  # conservative free-tier default; override via env
+    garak_parallel_attempts: int = 10
     garak_timeout_seconds: int = 7200
+    garak_soft_probe_prompt_cap: int = 50   # meaningful sample size per probe
+    garak_soft_probe_prompt_cap_max: int = 50
 
     # API server
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
-    # Gradio
+    # Gradio — must point to the API container name on the Docker network
     gradio_server_port: int = 7860
     api_base_url: str = "http://localhost:8000"
 

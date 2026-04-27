@@ -9,7 +9,7 @@ services:
     environment:
       POSTGRES_DB: garakboard
       POSTGRES_USER: garakboard
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-garakboard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in docker/.env (copy from docker/.env.docker)}
     ports:
       - "5433:5432"
     volumes:

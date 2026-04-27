@@ -21,6 +21,7 @@ htmlcov/
 
 # Environment files
 .env
+docker/.env
 
 # IDE
 .idea/

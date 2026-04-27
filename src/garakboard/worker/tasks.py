@@ -6,13 +6,14 @@ from datetime import datetime, timezone
 
 from celery import Task
 from celery.exceptions import Retry
+from sqlalchemy.exc import OperationalError
 
 from garakboard.worker.celery_app import celery_app
 from garakboard.worker.garak_runner import build_garak_config, run_garak
 from garakboard.worker.rate_limiter import get_run_lock
 from garakboard.ingest.jsonl_parser import ingest_jsonl_file
 from garakboard.database import SessionLocal
-from garakboard.models import Run, Model
+from garakboard.models import Run, Model, ProbeRunQueue
 from garakboard.config import settings
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,7 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
                 output_dir=output_dir,
                 parallel_attempts=settings.garak_parallel_attempts,
                 rpm_limit=settings.openrouter_rpm_limit,
+                soft_probe_prompt_cap=settings.garak_soft_probe_prompt_cap,
             )
 
             try:
@@ -111,35 +113,6 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
                 return {"error": str(exc)}
 
             # 4. Ingest JSONL output
-            logger.info(f"[DEBUG] JSONL path for run {run_id}: {jsonl_path}")
-            # Read and log JSONL entry types for diagnostics
-            try:
-                import json
-                entry_types = set()
-                eval_count = 0
-                attempt_count = 0
-                with open(jsonl_path, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            entry = json.loads(line)
-                            entry_type = entry.get('entry_type', 'unknown')
-                            entry_types.add(entry_type)
-                            if entry_type == 'eval':
-                                eval_count += 1
-                            elif entry_type == 'attempt':
-                                attempt_count += 1
-                        except json.JSONDecodeError:
-                            pass
-                logger.warning(
-                    f"[DEBUG] Run {run_id} JSONL analysis: "
-                    f"entry_types={entry_types}, eval_count={eval_count}, attempt_count={attempt_count}"
-                )
-            except Exception as e:
-                logger.warning(f"[DEBUG] Could not analyze JSONL file: {e}")
-
             result = ingest_jsonl_file(jsonl_path, run_id, db)
             db.commit()
 
@@ -161,14 +134,50 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
 
     except Retry:
         raise
+    except OperationalError as exc:
+        # Database connection error — retry with exponential backoff
+        logger.warning(f"Database connection error in run_scan for {run_id}: {exc}")
+        try:
+            # Release lock before requeueing
+            if acquired:
+                lock.release(model_name)
+                acquired = False
+            # Reset any stuck ProbeRunQueue entries for this run's model
+            db.rollback()
+            run = db.query(Run).filter(Run.id == run_id).first()
+            if run:
+                run.status = "pending"
+                db.commit()
+                # Reset probe queue entries stuck in "running" status
+                db.query(ProbeRunQueue).filter(
+                    ProbeRunQueue.model_id == run.model_id,
+                    ProbeRunQueue.status == "running",
+                ).update({"status": "pending"})
+                db.commit()
+        except Exception as inner_exc:
+            logger.error(
+                f"Failed to reset run {run_id} after OperationalError: {inner_exc}"
+            )
+        countdown = 30 * (2 ** self.request.retries)
+        raise self.retry(exc=exc, countdown=countdown)
     except Exception as exc:
         logger.error(f"Unexpected error in run_scan for {run_id}: {exc}")
         try:
+            # Release lock before marking failed
+            if acquired:
+                lock.release(model_name)
+                acquired = False
             db.rollback()
             run = db.query(Run).filter(Run.id == run_id).first()
             if run:
                 run.status = "failed"
                 run.completed_at = datetime.now(timezone.utc)
+                db.commit()
+                # Reset probe queue entries stuck in "running" status
+                db.query(ProbeRunQueue).filter(
+                    ProbeRunQueue.model_id == run.model_id,
+                    ProbeRunQueue.status == "running",
+                ).update({"status": "pending"})
                 db.commit()
         except Exception as inner_exc:
             logger.error(

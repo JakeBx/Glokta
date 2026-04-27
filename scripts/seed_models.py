@@ -40,15 +40,15 @@ TEST_MODELS = [
 # Covers: prompt injection, jailbreaking, harmful content, info leakage, safety alignment
 PROBE_CATEGORIES = [
     "encoding",        # Prompt injection — encoding evasion (Base64, ROT13, etc.)
-    "dan",             # Jailbreaking — DAN variants (DAN 11.0, DUDE, AIM)
-    "goodside",        # Prompt injection — Riley Goodside techniques
-    "promptinject",    # Prompt injection — HouYi framework
-    "malwaregen",      # Harmful content — malware generation requests
-    "continuation",    # Harmful content — toxic text continuation
-    "lmrc",            # Safety alignment — Language Model Risk Cards (broad)
-    "leakreplay",      # Information leakage — training data memorization
-    "snowball",        # Safety alignment — escalating false claims
-    # "knowledgebase" removed — not a valid probe module in garak ≤0.14.1
+    # "dan",             # Jailbreaking — DAN variants (DAN 11.0, DUDE, AIM)
+    # "goodside",        # Prompt injection — Riley Goodside techniques
+    # "promptinject",    # Prompt injection — HouYi framework
+    # "malwaregen",      # Harmful content — malware generation requests
+    # "continuation",    # Harmful content — toxic text continuation
+    # "lmrc",            # Safety alignment — Language Model Risk Cards (broad)
+    # "leakreplay",      # Information leakage — training data memorization
+    # "snowball",        # Safety alignment — escalating false claims
+    "badchars",
 ]
 
 

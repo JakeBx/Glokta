@@ -20,6 +20,7 @@ def build_garak_config(
     output_dir: str,
     parallel_attempts: int = 1,
     rpm_limit: int | None = None,
+    soft_probe_prompt_cap: int | None = None,
 ) -> dict:
     """
     Build a garak configuration dict suitable for writing as YAML.
@@ -30,6 +31,7 @@ def build_garak_config(
         output_dir: Directory where garak should write its JSONL output
         parallel_attempts: Number of parallel attempts (default 1)
         rpm_limit: Optional rate limit in requests per minute for the generator
+        soft_probe_prompt_cap: Optional limit on prompts per probe (default None)
 
     Returns:
         dict suitable for yaml.dump()
@@ -50,6 +52,15 @@ def build_garak_config(
             "report_dir": output_dir,
         },
     }
+
+    if rpm_limit is not None:
+        # Pass rate limit through to garak so it respects the OpenRouter plan tier
+        config["system"]["generators_options"] = {
+            "max_requests_per_minute": rpm_limit,
+        }
+
+    if soft_probe_prompt_cap is not None:
+        config["plugins"]["soft_probe_prompt_cap"] = soft_probe_prompt_cap
 
     return config
 
