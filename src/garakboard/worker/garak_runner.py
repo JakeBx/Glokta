@@ -60,7 +60,11 @@ def build_garak_config(
         }
 
     if soft_probe_prompt_cap is not None:
-        config["plugins"]["soft_probe_prompt_cap"] = soft_probe_prompt_cap
+        # Both settings belong under `run:` per garak core schema
+        config["run"] = {
+            "soft_probe_prompt_cap": soft_probe_prompt_cap,
+            "generations": 1,  # 1 response per prompt keeps runs minimal
+        }
 
     return config
 

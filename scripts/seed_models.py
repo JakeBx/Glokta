@@ -16,8 +16,6 @@ receives one ProbeRunQueue entry per probe category, covering 5 security dimensi
 import sys
 import os
 from datetime import date
-from collections import defaultdict
-import uuid
 
 # Allow running from repo root without installing
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -34,20 +32,21 @@ TEST_MODELS = [
     ("openrouter/google/gemini-2.5-flash-lite", "google", "gemini-2.5-flash-lite"),
     ("openrouter/openai/gpt-4o-mini", "openai", "gpt-4o-mini"),
     ("openrouter/mistralai/mistral-nemo", "mistralai", "nemo"),
+    ("openrouter/meta-llama/llama-3.1-8b-instruct", "meta-llama", "3.1-8b-instruct"),
 ]
 
 # Garak probe categories for reasonable security coverage
 # Covers: prompt injection, jailbreaking, harmful content, info leakage, safety alignment
 PROBE_CATEGORIES = [
     "encoding",        # Prompt injection — encoding evasion (Base64, ROT13, etc.)
-    # "dan",             # Jailbreaking — DAN variants (DAN 11.0, DUDE, AIM)
-    # "goodside",        # Prompt injection — Riley Goodside techniques
-    # "promptinject",    # Prompt injection — HouYi framework
-    # "malwaregen",      # Harmful content — malware generation requests
-    # "continuation",    # Harmful content — toxic text continuation
-    # "lmrc",            # Safety alignment — Language Model Risk Cards (broad)
-    # "leakreplay",      # Information leakage — training data memorization
-    # "snowball",        # Safety alignment — escalating false claims
+    "dan",             # Jailbreaking — DAN variants (DAN 11.0, DUDE, AIM)
+    "goodside",        # Prompt injection — Riley Goodside techniques
+    "promptinject",    # Prompt injection — HouYi framework
+    "malwaregen",      # Harmful content — malware generation requests
+    "continuation",    # Harmful content — toxic text continuation
+    "lmrc",            # Safety alignment — Language Model Risk Cards (broad)
+    "leakreplay",      # Information leakage — training data memorization
+    "snowball",        # Safety alignment — escalating false claims
     "badchars",
 ]
 
@@ -128,16 +127,17 @@ def seed_probe_queue(session) -> tuple[int, int]:
     return inserted, skipped
 
 
-def dispatch_pending_queue(session) -> tuple[int, int]:
+def dispatch_pending_queue(session) -> int:
     """
-    Read pending ProbeRunQueue entries for TEST_MODELS, create Run records,
-    and dispatch them to Celery via publish_run_job().
+    Read pending ProbeRunQueue entries for TEST_MODELS, create one Run per
+    (model, probe_category) pair, and dispatch each to Celery via publish_run_job().
 
-    Skips models that already have a pending or running Run to avoid duplicate
-    dispatches.
+    The per-model Redis lock in the worker serializes concurrent runs for the
+    same model — all runs are dispatched immediately and the lock ensures only
+    one executes per model at a time.
 
     Returns:
-        (dispatched_model_count, dispatched_probe_count)
+        dispatched_count
     """
     model_names = [name for name, _, _ in TEST_MODELS]
     models = (
@@ -156,62 +156,33 @@ def dispatch_pending_queue(session) -> tuple[int, int]:
         .all()
     )
 
-    # Group queue entries by model_id
-    entries_by_model: dict = defaultdict(list)
+    dispatched = 0
+
     for entry in pending_entries:
-        entries_by_model[entry.model_id].append(entry)
+        model = model_by_id[entry.model_id]
 
-    dispatched_models = 0
-    dispatched_probes = 0
-
-    for model_id, entries in entries_by_model.items():
-        model = model_by_id[model_id]
-
-        # Skip if the model already has an active (pending or running) Run
-        active_run = (
-            session.query(Run)
-            .filter(
-                Run.model_id == model_id,
-                Run.status.in_(("pending", "running")),
-            )
-            .first()
-        )
-        if active_run:
-            print(f"  ↷ Skipping {model.name} — already has an active run ({active_run.status})")
-            continue
-
-        categories = [entry.probe_category for entry in entries]
-
-        # Create a new Run record
         run = Run(
-            model_id=model_id,
+            model_id=entry.model_id,
             triggered_by="seed_script",
             status="pending",
         )
         session.add(run)
-        session.flush()  # Populate run.id before using it
+        entry.status = "running"
+        session.commit()  # commit before dispatch so the worker can find the run
 
-        # Dispatch to Celery; revert on connection failure
         try:
-            publish_run_job(str(run.id), model.name, categories)
+            publish_run_job(str(run.id), model.name, [entry.probe_category])
         except Exception as e:
-            print(f"  ⚠ Failed to dispatch {model.name}: {e}")
+            print(f"  ⚠ Failed to dispatch {model.name}/{entry.probe_category}: {e}")
             run.status = "failed"
-            for entry in entries:
-                entry.status = "pending"
+            entry.status = "pending"
             session.commit()
             continue
 
-        # Mark queue entries as running
-        for entry in entries:
-            entry.status = "running"
+        dispatched += 1
+        print(f"  ✓ Dispatched {model.name} — {entry.probe_category}")
 
-        dispatched_models += 1
-        dispatched_probes += len(categories)
-        print(f"  ✓ Dispatched {model.name} — {len(categories)} probe categories")
-
-    session.commit()
-    return dispatched_models, dispatched_probes
+    return dispatched
 
 
 def main():
@@ -245,10 +216,10 @@ def main():
         if args.dispatch:
             print()
             print("Dispatching pending probe runs to Celery workers...")
-            models_dispatched, probes_dispatched = dispatch_pending_queue(session)
-            print(f"✓ Dispatched: {models_dispatched} models ({probes_dispatched} probe categories)")
-            if models_dispatched == 0:
-                print("  (All models already have active runs — nothing to dispatch)")
+            dispatched = dispatch_pending_queue(session)
+            print(f"✓ Dispatched: {dispatched} runs")
+            if dispatched == 0:
+                print("  (Nothing pending — all queue entries already dispatched)")
         else:
             pending = session.query(ProbeRunQueue).filter(
                 ProbeRunQueue.status == "pending"

@@ -19,34 +19,13 @@ from garakboard.schemas import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-def _latest_run_subquery():
-    """Return a subquery that selects the most recent complete run id per model.
-
-    Joins runs against the per-model max(created_at) to identify the single
-    most recent complete run. Same-millisecond ties are not broken further;
-    they are vanishingly rare in practice.
-    """
-    max_ts = (
-        select(
-            Run.model_id,
-            func.max(Run.created_at).label("max_created_at"),
-        )
-        .where(Run.status == "complete")
-        .group_by(Run.model_id)
-        .subquery()
-    )
-
-    latest = (
+def _all_complete_runs_subquery():
+    """Return a subquery selecting all complete run ids and their model_ids."""
+    return (
         select(Run.id.label("id"), Run.model_id)
-        .join(
-            max_ts,
-            (Run.model_id == max_ts.c.model_id)
-            & (Run.created_at == max_ts.c.max_created_at),
-        )
         .where(Run.status == "complete")
         .subquery()
     )
-    return latest
 
 
 def _apply_filters(stmt, probe_category: str | None, model_id: UUID | None):
@@ -67,7 +46,7 @@ def get_leaderboard(
     db: Session = Depends(get_db),
 ) -> LeaderboardResponse:
     """Paginated leaderboard — one row per (model, probe_category) from each model's most recent complete run."""
-    latest_run = _latest_run_subquery()
+    latest_run = _all_complete_runs_subquery()
 
     # Base aggregation: join probe_results to the most-recent-run subquery
     base = (
@@ -126,15 +105,19 @@ def get_model_detail(model_id: UUID, db: Session = Depends(get_db)) -> ModelDeta
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
 
-    # Most recent complete run for this model
-    run = (
-        db.query(Run)
+    complete_run_ids = (
+        db.query(Run.id)
         .filter(Run.model_id == model_id, Run.status == "complete")
-        .order_by(Run.created_at.desc())
-        .first()
+        .subquery()
     )
 
-    if not run:
+    probe_results = (
+        db.query(ProbeResult)
+        .filter(ProbeResult.run_id.in_(complete_run_ids))
+        .all()
+    )
+
+    if not probe_results:
         return ModelDetailResponse(
             model_id=model.id,
             model_name=model.name,
@@ -142,12 +125,6 @@ def get_model_detail(model_id: UUID, db: Session = Depends(get_db)) -> ModelDeta
             probe_results=[],
             summary=None,
         )
-
-    probe_results = (
-        db.query(ProbeResult)
-        .filter(ProbeResult.run_id == run.id)
-        .all()
-    )
 
     probe_result_details = [
         ProbeResultDetail(

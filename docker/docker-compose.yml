@@ -63,7 +63,6 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.worker
-    container_name: garakboard-worker
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://garakboard:${POSTGRES_PASSWORD}@postgres:5432/garakboard
