@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     gradio_server_port: int = 7860
     api_base_url: str = "http://localhost:8000"
 
+    # Scheduler
+    scheduler_enabled: bool = True
+    scheduler_top_n_models: int = 20
+    scheduler_scan_ttl_days: int = 7
+    openrouter_stats_url: str = "https://openrouter.ai/api/v1/models"
+
     @field_validator("openrouter_api_key")
     @classmethod
     def api_key_must_be_set(cls, v: str) -> str:

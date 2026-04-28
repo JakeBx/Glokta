@@ -3,6 +3,7 @@
 import os
 
 from celery import Celery
+from celery.schedules import crontab
 from garakboard.config import settings
 
 celery_app = Celery(
@@ -27,4 +28,11 @@ celery_app.conf.update(
     # Retry config for 429 rate limits
     task_default_retry_delay=30,
     task_max_retries=5,
+    # Weekly scheduled scan discovery — Monday 02:00 UTC
+    beat_schedule={
+        "weekly-scan-discovery": {
+            "task": "garakboard.worker.tasks.discover_and_schedule_scans",
+            "schedule": crontab(hour=2, minute=0, day_of_week=1),
+        }
+    },
 )

@@ -2,7 +2,7 @@
 
 import logging
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from celery import Task
 from celery.exceptions import Retry
@@ -10,6 +10,7 @@ from sqlalchemy.exc import OperationalError
 
 from garakboard.worker.celery_app import celery_app
 from garakboard.worker.garak_runner import build_garak_config, run_garak
+from garakboard.worker.openrouter_client import fetch_top_models
 from garakboard.worker.rate_limiter import get_run_lock
 from garakboard.ingest.jsonl_parser import ingest_jsonl_file
 from garakboard.database import SessionLocal
@@ -188,3 +189,81 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
         if acquired:
             lock.release(model_name)
         db.close()
+
+
+@celery_app.task(name="garakboard.worker.tasks.discover_and_schedule_scans")
+def discover_and_schedule_scans() -> dict:
+    """
+    Discover the top-N free-tier models from OpenRouter and queue a scheduled
+    scan for any model whose last complete run is older than scan_ttl_days.
+
+    Returns:
+        dict with 'queued' and 'skipped' counts.
+    """
+    if not settings.scheduler_enabled:
+        return {"queued": 0, "skipped": 0}
+
+    top_models = fetch_top_models(settings.openrouter_api_key, settings.scheduler_top_n_models)
+
+    db = SessionLocal()
+    queued = 0
+    skipped = 0
+
+    try:
+        staleness_cutoff = datetime.now(timezone.utc) - timedelta(days=settings.scheduler_scan_ttl_days)
+
+        for model_data in top_models:
+            model_name = model_data.get("id", "")
+            if not model_name:
+                continue
+
+            # Upsert model record
+            model = db.query(Model).filter(Model.name == model_name).first()
+            if model is None:
+                from datetime import date
+                model = Model(
+                    name=model_name,
+                    provider=model_name.split("/")[1] if "/" in model_name else model_name,
+                    snapshot_date=date.today(),
+                )
+                db.add(model)
+                db.flush()
+
+            # Check freshness: skip if a complete run exists within TTL
+            latest_run = (
+                db.query(Run)
+                .filter(Run.model_id == model.id, Run.status == "complete")
+                .order_by(Run.completed_at.desc())
+                .first()
+            )
+
+            if latest_run and latest_run.completed_at:
+                completed = latest_run.completed_at
+                # Normalise to UTC-aware for comparison
+                if completed.tzinfo is None:
+                    completed = completed.replace(tzinfo=timezone.utc)
+                if completed >= staleness_cutoff:
+                    skipped += 1
+                    continue
+
+            # Queue a scheduled scan
+            run = Run(
+                model_id=model.id,
+                triggered_by="scheduled",
+                status="pending",
+            )
+            db.add(run)
+            db.flush()
+            publish_run_job(str(run.id), model_name, [])
+            queued += 1
+
+        db.commit()
+    except Exception as exc:
+        logger.error(f"discover_and_schedule_scans failed: {exc}")
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+    logger.info(f"discover_and_schedule_scans: queued={queued}, skipped={skipped}")
+    return {"queued": queued, "skipped": skipped}

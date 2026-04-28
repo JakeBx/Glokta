@@ -29,6 +29,7 @@ class LeaderboardRow(BaseModel):
     total_pass: int
     total_fail: int
     score: float  # weighted average score across all probe_results for this model+category
+    origin: str = "api"  # triggered_by of the most recent complete run
 
     @computed_field
     @property

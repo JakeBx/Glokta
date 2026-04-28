@@ -48,6 +48,16 @@ def get_leaderboard(
     """Paginated leaderboard — one row per (model, probe_category) from each model's most recent complete run."""
     latest_run = _all_complete_runs_subquery()
 
+    # Correlated subquery: triggered_by of the most recent complete run per model
+    latest_origin = (
+        select(Run.triggered_by)
+        .where(Run.model_id == Model.id, Run.status == "complete")
+        .order_by(Run.completed_at.desc())
+        .limit(1)
+        .correlate(Model)
+        .scalar_subquery()
+    )
+
     # Base aggregation: join probe_results to the most-recent-run subquery
     base = (
         select(
@@ -58,6 +68,7 @@ def get_leaderboard(
             func.sum(ProbeResult.pass_count).label("total_pass"),
             func.sum(ProbeResult.fail_count).label("total_fail"),
             func.coalesce(func.avg(ProbeResult.score), 0.0).label("score"),
+            latest_origin.label("origin"),
         )
         .join(latest_run, ProbeResult.run_id == latest_run.c.id)
         .join(Model, latest_run.c.model_id == Model.id)
@@ -83,6 +94,7 @@ def get_leaderboard(
             total_pass=row.total_pass or 0,
             total_fail=row.total_fail or 0,
             score=row.score or 0.0,
+            origin=row.origin or "api",
         )
         for row in results
     ]

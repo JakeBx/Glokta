@@ -2,6 +2,80 @@
 
 GarakBoard is an automated vulnerability scanning platform that runs [garak](https://github.com/NVIDIA/garak) probes against LLM endpoints and surfaces comparative security results in a leaderboard dashboard. It coordinates async scan jobs via Celery + Redis, persists results in PostgreSQL, and presents everything through a Gradio UI and a REST API.
 
+## Why GarakBoard?
+
+# Why GarakBoard
+
+## The problem with existing LLM security leaderboards
+
+Every major LLM security leaderboard in use today shares the same fundamental flaw: the methodology is proprietary. You receive a score. You cannot verify how it was produced, reproduce it independently, or confirm that the same tests will run next month. For teams making procurement or deployment decisions based on these scores, that is a significant trust problem.
+
+GarakBoard is built on NVIDIA's open-source garak scanner. Every score on the leaderboard is a raw pass rate derived from a named, publicly available probe. Any result can be independently reproduced by running the same garak command against the same model. There is no proprietary formula, no hidden weighting, and no black-box index between the test and the number you see.
+
+---
+
+## How the alternatives fall short
+
+### Enkrypt AI LLM Safety Leaderboard
+
+Enkrypt maps results to OWASP Top 10 for LLMs 2025 and NIST risk categories, which is a credible framework choice. The problem is the test suite itself is closed. The leaderboard is a lead-generation tool for a paid platform, and there is no mechanism to verify what prompts were run, inspect individual probe results, or reproduce a score externally.
+
+### Cisco AI Defense Leaderboard
+
+Cisco tests models in their base configuration and splits scoring 50/50 between single-turn and multi-turn attack resistance. The threat categories are mapped to Cisco's internal AI Security and Safety Framework taxonomy — a framework that is not externally auditable. Results cannot be reproduced outside Cisco's infrastructure. The leaderboard serves primarily as a marketing vehicle for Cisco AI Defense.
+
+### CalypsoAI CASI
+
+CalypsoAI uses autonomous agents to simulate persistent adversarial analysts, which is a more sophisticated attack model than most competitors. The CASI score, however, incorporates undisclosed weighting across severity, technical sophistication, and hardware requirements. No independent researcher can reproduce a CASI score, and detailed results require a sales conversation to access.
+
+### Guardion AI
+
+Guardion tests runtime guardrail mitigations rather than base models — a useful but different question. If you want to know how a guardrail layer performs under attack, Guardion is relevant. If you want to compare the inherent safety properties of base models, it is not the right tool. There is no probe-level granularity and no open methodology.
+
+### JailbreakBench
+
+JailbreakBench is the closest to GarakBoard in spirit: open source, reproducible, and academically rigorous. Its scope is narrow by design — 200 jailbreak behaviours only, with no coverage of prompt injection, toxicity, hallucination, or data leakage. It is not maintained as a living leaderboard and does not update as the model ecosystem evolves.
+
+---
+
+## What GarakBoard does differently
+
+**Auditable by design.** garak is open source and actively maintained by NVIDIA and the community. The probe that produced a score is named, documented, and runnable. Security claims on GarakBoard can be verified by any team with an API key and a terminal.
+
+**Probe-level granularity.** Aggregate scores obscure the detail that matters. A model with strong jailbreak resistance and poor prompt injection resistance should not present the same headline number as a model that performs consistently across both. GarakBoard lets you filter the leaderboard by individual probe category so you can evaluate models against the attack surface relevant to your deployment.
+
+**No proprietary scoring.** Scores are pass rates. The number of prompts that passed divided by the number run. No index, no weighting scheme, no adjustments applied after the fact.
+
+**Coverage that grows automatically.** garak's probe library currently covers 150+ attacks across jailbreaks, prompt injection, toxicity, hallucination, data leakage, and encoding-based attacks. As NVIDIA and the open-source community add probes, GarakBoard's coverage expands without manual test suite maintenance.
+
+**Community contributable.** The probe pipeline, scoring logic, and leaderboard infrastructure are all open source. Anyone can add probe categories, extend the model catalogue, propose scoring methodology changes, or improve the ingest pipeline via pull request. The leaderboard improves as the community improves it.
+
+**Run privately against your own models.** Self-host the full stack to scan internal or unreleased models that never leave your environment. Results share the same schema, probes, and scoring methodology as the public leaderboard, giving you a directly comparable security baseline without exposing proprietary model details to any third-party service.
+
+---
+
+## Competitive summary
+
+| Leaderboard | Open methodology | Probe-level filtering | Independently reproducible | Community contributable | Run against private models |
+|---|---|---|---|---|---|
+| Enkrypt AI | No | No | No | No | No |
+| Cisco AI Defense | No | No | No | No | No |
+| CalypsoAI CASI | No | No | No | No | No |
+| Guardion AI | No | No | No | No | No |
+| JailbreakBench | Yes | No — jailbreaks only | Yes | Yes | No |
+| **GarakBoard** | **Yes** | **Yes — 150+ probes** | **Yes** | **Yes** | **Yes** |
+
+## Features
+
+- **End-to-end garak ingest pipeline** — worker spawns garak as a subprocess, tails the JSONL output in real time, and streams results to PostgreSQL
+- **REST API with multi-axis filtering** — filter the leaderboard by probe category, model, and date; full Swagger UI at `/docs`
+- **Leaderboard UI** — filterable table with per-model drill-down showing probe-level breakdowns (Gradio, `localhost:7860`)
+- **Manual run triggering** — `POST /api/runs` with a model UUID and optional probe category list; status polling included
+- **Async job queue** — Celery + Redis with per-model token-bucket rate limiting and automatic 429 retry with exponential back-off
+- **Zero direct cost** — targets OpenRouter free-tier models (`*:free`) exclusively; no spend required to run the full probe suite
+- **Docker Compose full-stack deployment** — six services (API, worker, Celery Beat, Gradio frontend, PostgreSQL, Redis) in one command
+- **10+ probe categories** — `encoding`, `dan`, `goodside`, `promptinject`, `malwaregen`, `continuation`, `lmrc`, `leakreplay`, `snowball`, `badchars`
+
 ## Prerequisites
 
 - **Docker Desktop** (or Docker Engine + Compose V2) — required to run backing services (PostgreSQL, Redis) and optionally the full stack

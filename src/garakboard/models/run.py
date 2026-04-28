@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Enum, String, DateTime, ForeignKey, Index
+from sqlalchemy import Enum, String, Text, DateTime, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from garakboard.database import Base
@@ -41,6 +41,22 @@ class Run(Base):
         DateTime,
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
+    )
+
+    # Community run reproducibility metadata
+    garak_version: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    scanned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    submitted_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    garak_config: Mapped[str | None] = mapped_column(Text, nullable=True)
+    config_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    jsonl_manifest_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    verification_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Self-referential FK: on a verified Run, points to the community Run that prompted it
+    source_community_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUIDType(),
+        ForeignKey("runs.id"),
+        nullable=True,
     )
 
     # Relationships

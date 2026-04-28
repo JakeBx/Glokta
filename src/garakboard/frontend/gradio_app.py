@@ -75,6 +75,7 @@ def fetch_leaderboard(probe_category: str, model_id: str) -> pd.DataFrame:
             "Fail": row["total_fail"],
             "Score": f"{row['score']:.3f}" if row["score"] is not None else "N/A",
             "Pass Rate": f"{row['pass_rate']:.1%}",
+            "Origin": row.get("origin", "api"),
         })
 
     return pd.DataFrame(rows)
@@ -84,7 +85,9 @@ def fetch_run_summary() -> pd.DataFrame:
     """Fetch per-model run status counts from the API."""
     data = _get("/api/runs/summary/by-model")
     if not data:
-        return pd.DataFrame(columns=["Model", "Provider", "Complete", "Running", "Pending", "Failed"])
+        return pd.DataFrame(
+            columns=["Model", "Provider", "Complete", "Running", "Pending", "Failed", "Latest Origin"]
+        )
 
     rows = [
         {
@@ -94,6 +97,7 @@ def fetch_run_summary() -> pd.DataFrame:
             "Running": r["running"],
             "Pending": r["pending"],
             "Failed": r["failed"],
+            "Latest Origin": r.get("latest_origin", "api"),
         }
         for r in data
     ]
