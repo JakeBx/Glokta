@@ -1,7 +1,7 @@
 """Pydantic schemas for GarakBoard API."""
 
 from garakboard.schemas.model import ModelBase, ModelCreate, ModelResponse
-from garakboard.schemas.run import RunCreate, RunResponse, RunStatus
+from garakboard.schemas.run import RunCreate, RunResponse, RunStatus, RunSummaryRow
 from garakboard.schemas.probe_result import ProbeResultResponse
 from garakboard.schemas.leaderboard import (
     LeaderboardRow,
@@ -17,6 +17,7 @@ __all__ = [
     "RunCreate",
     "RunResponse",
     "RunStatus",
+    "RunSummaryRow",
     "ProbeResultResponse",
     "LeaderboardRow",
     "LeaderboardResponse",

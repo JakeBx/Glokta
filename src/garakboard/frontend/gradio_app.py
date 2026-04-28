@@ -80,6 +80,26 @@ def fetch_leaderboard(probe_category: str, model_id: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def fetch_run_summary() -> pd.DataFrame:
+    """Fetch per-model run status counts from the API."""
+    data = _get("/api/runs/summary/by-model")
+    if not data:
+        return pd.DataFrame(columns=["Model", "Provider", "Complete", "Running", "Pending", "Failed"])
+
+    rows = [
+        {
+            "Model": r["model_name"],
+            "Provider": r["provider"],
+            "Complete": r["complete"],
+            "Running": r["running"],
+            "Pending": r["pending"],
+            "Failed": r["failed"],
+        }
+        for r in data
+    ]
+    return pd.DataFrame(rows)
+
+
 def fetch_model_detail(model_id: str) -> pd.DataFrame:
     """
     Fetch per-model probe breakdown for the detail panel.
@@ -126,56 +146,74 @@ def build_app() -> gr.Blocks:
             """
         )
 
-        # --- Filter row ---
-        with gr.Row():
-            category_filter = gr.Dropdown(
-                label="Probe Category",
-                choices=["All"],
-                value="All",
-                interactive=True,
-                scale=2,
-            )
-            model_filter = gr.Dropdown(
-                label="Model",
-                choices=[("All", "")],
-                value="",
-                interactive=True,
-                scale=3,
-            )
-            refresh_btn = gr.Button("🔄 Refresh", scale=1, variant="secondary")
+        with gr.Tabs():
+            # ----------------------------------------------------------------
+            # Tab 1: Leaderboard
+            # ----------------------------------------------------------------
+            with gr.Tab("Leaderboard"):
+                with gr.Row():
+                    category_filter = gr.Dropdown(
+                        label="Probe Category",
+                        choices=["All"],
+                        value="All",
+                        interactive=True,
+                        scale=2,
+                    )
+                    model_filter = gr.Dropdown(
+                        label="Model",
+                        choices=[("All", "")],
+                        value="",
+                        interactive=True,
+                        scale=3,
+                    )
+                    refresh_btn = gr.Button("🔄 Refresh", scale=1, variant="secondary")
 
-        # --- Leaderboard table ---
-        leaderboard_table = gr.Dataframe(
-            label="Leaderboard",
-            interactive=False,
-            wrap=True,
-        )
+                leaderboard_table = gr.Dataframe(
+                    label="Leaderboard",
+                    interactive=False,
+                    wrap=True,
+                )
 
-        # --- Per-model detail ---
-        gr.Markdown("### Per-Model Probe Breakdown")
-        gr.Markdown("*Select a model from the dropdown above to see its probe breakdown.*")
+                gr.Markdown("### Per-Model Probe Breakdown")
+                gr.Markdown("*Select a model from the dropdown above to see its probe breakdown.*")
 
-        detail_table = gr.Dataframe(
-            label="Probe Details",
-            interactive=False,
-            wrap=True,
-        )
+                detail_table = gr.Dataframe(
+                    label="Probe Details",
+                    interactive=False,
+                    wrap=True,
+                )
+
+            # ----------------------------------------------------------------
+            # Tab 2: Run Status
+            # ----------------------------------------------------------------
+            with gr.Tab("Run Status"):
+                gr.Markdown("Per-model scan status. Refreshes automatically every 30 seconds while runs are active.")
+
+                run_summary_table = gr.Dataframe(
+                    label="Run Status by Model",
+                    interactive=False,
+                    wrap=True,
+                )
+
+                run_refresh_btn = gr.Button("🔄 Refresh Now", variant="secondary")
+                run_timer = gr.Timer(value=30, active=True)
 
         # --- Event: initial load ---
         def on_load():
             categories = fetch_probe_categories()
             models = fetch_models()
             df = fetch_leaderboard("All", "")
+            summary_df = fetch_run_summary()
             return (
                 gr.update(choices=categories, value="All"),
                 gr.update(choices=models, value=""),
                 df,
+                summary_df,
             )
 
         # --- Event: filter change ---
         def on_filter_change(probe_category: str, model_id: str):
             df = fetch_leaderboard(probe_category, model_id)
-            # Always load model detail when a model is selected
             if model_id and model_id != "":
                 detail_df = fetch_model_detail(model_id)
             else:
@@ -188,7 +226,7 @@ def build_app() -> gr.Blocks:
         demo.load(
             fn=on_load,
             inputs=None,
-            outputs=[category_filter, model_filter, leaderboard_table],
+            outputs=[category_filter, model_filter, leaderboard_table, run_summary_table],
         )
 
         refresh_btn.click(
@@ -207,6 +245,18 @@ def build_app() -> gr.Blocks:
             fn=on_filter_change,
             inputs=[category_filter, model_filter],
             outputs=[leaderboard_table, detail_table],
+        )
+
+        run_refresh_btn.click(
+            fn=fetch_run_summary,
+            inputs=None,
+            outputs=[run_summary_table],
+        )
+
+        run_timer.tick(
+            fn=fetch_run_summary,
+            inputs=None,
+            outputs=[run_summary_table],
         )
 
     return demo

@@ -23,3 +23,12 @@ class RunResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class RunSummaryRow(BaseModel):
+    model_name: str
+    provider: str
+    pending: int
+    running: int
+    complete: int
+    failed: int
