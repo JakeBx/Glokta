@@ -4,8 +4,6 @@ GarakBoard is an automated vulnerability scanning platform that runs [garak](htt
 
 Built as a project to explore what a reproducible, self-hostable LLM security leaderboard looks like in practice. Scores are raw pass rates from named garak probes — no proprietary weighting, no index. Any result can be reproduced by running the same garak command against the same model.
 
-Where academic benchmarks like HELM Safety cover static safety scenarios, GarakBoard focuses on adversarial probes — jailbreaks, prompt injection, encoding attacks — and is designed to be self-hosted, extended with new probe categories, and run against private models that never leave your environment.
-
 ## Features
 
 - **End-to-end garak ingest pipeline** — worker spawns garak as a subprocess, tails the JSONL output in real time, and streams results to PostgreSQL
@@ -237,12 +235,77 @@ Full interactive documentation at **http://localhost:8000/docs**.
 | `page` | int | 1 | Page number |
 | `page_size` | int | 25 | Results per page (max 100) |
 
+## HuggingFace Dataset Sync
+
+GarakBoard can export leaderboard results to a HuggingFace dataset and restore them into any database instance.
+
+### Setup
+
+Add these to your `.env` file:
+
+```
+HF_DATASET_REPO=your-username/open-llm-sec-leaderboard
+HF_TOKEN=hf_your_write_token_here
+```
+
+Install the optional dataset dependencies:
+
+```bash
+pip install "garakboard[dataset]"
+# or with conda
+conda run -n garakboard pip install "datasets>=2.19" "huggingface_hub>=0.23"
+```
+
+### Export to HuggingFace
+
+Exports three tables — `models`, `runs`, `probe_results` — as a multi-split dataset and pushes to the Hub.
+
+```bash
+# Conda dev env
+PYTHONPATH=src python scripts/export_to_hf.py
+
+# Docker
+docker compose -f docker/docker-compose.yml exec api python /app/scripts/export_to_hf.py
+
+# Dry-run (no upload, just print counts)
+PYTHONPATH=src python scripts/export_to_hf.py --dry-run
+```
+
+### Import from HuggingFace
+
+Performs an **idempotent merge** — existing rows are skipped, missing rows are inserted. Safe to run repeatedly.
+
+```bash
+# Conda dev env
+PYTHONPATH=src python scripts/import_from_hf.py
+
+# Docker
+docker compose -f docker/docker-compose.yml exec api python /app/scripts/import_from_hf.py
+
+# Dry-run (download and report without writing to DB)
+PYTHONPATH=src python scripts/import_from_hf.py --dry-run
+```
+
+#### Merge keys
+
+| Table | Match Key |
+|-------|-----------|
+| `models` | `id` (UUID) |
+| `runs` | `id` (UUID) |
+| `probe_results` | `run_id` + `probe_name` + `detector` |
+
+Import order respects FK dependencies: `models` → `runs` → `probe_results`.
+
+---
+
 ## Project Structure
 
 ```
 open-llm-sec/
 ├── scripts/
-│   └── seed_models.py          # Idempotent model catalogue seeder
+│   ├── seed_models.py          # Idempotent model catalogue seeder
+│   ├── export_to_hf.py         # Export DB → HuggingFace dataset
+│   └── import_from_hf.py       # Import HuggingFace dataset → DB (idempotent merge)
 ├── src/garakboard/
 │   ├── config.py               # Pydantic Settings (env vars)
 │   ├── database.py             # SQLAlchemy engine + SessionLocal, init_db()

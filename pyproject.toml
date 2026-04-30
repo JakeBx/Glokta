@@ -34,6 +34,10 @@ dev = [
     "factory-boy>=3.3",
     "fakeredis>=2.23",
 ]
+dataset = [
+    "datasets>=2.19",
+    "huggingface_hub>=0.23",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

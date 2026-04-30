@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     scheduler_scan_ttl_days: int = 7
     openrouter_stats_url: str = "https://openrouter.ai/api/v1/models"
 
+    # HuggingFace Dataset sync — optional, only needed for export/import scripts
+    hf_dataset_repo: str = ""  # e.g. "your-username/open-llm-sec-leaderboard"
+    hf_token: str = ""         # HuggingFace API token (write for export, read for private import)
+
     @field_validator("openrouter_api_key")
     @classmethod
     def api_key_must_be_set(cls, v: str) -> str:
