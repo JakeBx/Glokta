@@ -2,68 +2,9 @@
 
 GarakBoard is an automated vulnerability scanning platform that runs [garak](https://github.com/NVIDIA/garak) probes against LLM endpoints and surfaces comparative security results in a leaderboard dashboard. It coordinates async scan jobs via Celery + Redis, persists results in PostgreSQL, and presents everything through a Gradio UI and a REST API.
 
-## Why GarakBoard?
+Built as a project to explore what a reproducible, self-hostable LLM security leaderboard looks like in practice. Scores are raw pass rates from named garak probes — no proprietary weighting, no index. Any result can be reproduced by running the same garak command against the same model.
 
-# Why GarakBoard
-
-## The problem with existing LLM security leaderboards
-
-Every major LLM security leaderboard in use today shares the same fundamental flaw: the methodology is proprietary. You receive a score. You cannot verify how it was produced, reproduce it independently, or confirm that the same tests will run next month. For teams making procurement or deployment decisions based on these scores, that is a significant trust problem.
-
-GarakBoard is built on NVIDIA's open-source garak scanner. Every score on the leaderboard is a raw pass rate derived from a named, publicly available probe. Any result can be independently reproduced by running the same garak command against the same model. There is no proprietary formula, no hidden weighting, and no black-box index between the test and the number you see.
-
----
-
-## How the alternatives fall short
-
-### Enkrypt AI LLM Safety Leaderboard
-
-Enkrypt maps results to OWASP Top 10 for LLMs 2025 and NIST risk categories, which is a credible framework choice. The problem is the test suite itself is closed. The leaderboard is a lead-generation tool for a paid platform, and there is no mechanism to verify what prompts were run, inspect individual probe results, or reproduce a score externally.
-
-### Cisco AI Defense Leaderboard
-
-Cisco tests models in their base configuration and splits scoring 50/50 between single-turn and multi-turn attack resistance. The threat categories are mapped to Cisco's internal AI Security and Safety Framework taxonomy — a framework that is not externally auditable. Results cannot be reproduced outside Cisco's infrastructure. The leaderboard serves primarily as a marketing vehicle for Cisco AI Defense.
-
-### CalypsoAI CASI
-
-CalypsoAI uses autonomous agents to simulate persistent adversarial analysts, which is a more sophisticated attack model than most competitors. The CASI score, however, incorporates undisclosed weighting across severity, technical sophistication, and hardware requirements. No independent researcher can reproduce a CASI score, and detailed results require a sales conversation to access.
-
-### Guardion AI
-
-Guardion tests runtime guardrail mitigations rather than base models — a useful but different question. If you want to know how a guardrail layer performs under attack, Guardion is relevant. If you want to compare the inherent safety properties of base models, it is not the right tool. There is no probe-level granularity and no open methodology.
-
-### JailbreakBench
-
-JailbreakBench is the closest to GarakBoard in spirit: open source, reproducible, and academically rigorous. Its scope is narrow by design — 200 jailbreak behaviours only, with no coverage of prompt injection, toxicity, hallucination, or data leakage. It is not maintained as a living leaderboard and does not update as the model ecosystem evolves.
-
----
-
-## What GarakBoard does differently
-
-**Auditable by design.** garak is open source and actively maintained by NVIDIA and the community. The probe that produced a score is named, documented, and runnable. Security claims on GarakBoard can be verified by any team with an API key and a terminal.
-
-**Probe-level granularity.** Aggregate scores obscure the detail that matters. A model with strong jailbreak resistance and poor prompt injection resistance should not present the same headline number as a model that performs consistently across both. GarakBoard lets you filter the leaderboard by individual probe category so you can evaluate models against the attack surface relevant to your deployment.
-
-**No proprietary scoring.** Scores are pass rates. The number of prompts that passed divided by the number run. No index, no weighting scheme, no adjustments applied after the fact.
-
-**Coverage that grows automatically.** garak's probe library currently covers 150+ attacks across jailbreaks, prompt injection, toxicity, hallucination, data leakage, and encoding-based attacks. As NVIDIA and the open-source community add probes, GarakBoard's coverage expands without manual test suite maintenance.
-
-**Community contributable.** The probe pipeline, scoring logic, and leaderboard infrastructure are all open source. Anyone can add probe categories, extend the model catalogue, propose scoring methodology changes, or improve the ingest pipeline via pull request. The leaderboard improves as the community improves it.
-
-**Run privately against your own models.** Self-host the full stack to scan internal or unreleased models that never leave your environment. Results share the same schema, probes, and scoring methodology as the public leaderboard, giving you a directly comparable security baseline without exposing proprietary model details to any third-party service.
-
----
-
-## Competitive summary
-
-| Leaderboard | Open methodology | Probe-level filtering | Independently reproducible | Community contributable | Run against private models |
-|---|---|---|---|---|---|
-| Enkrypt AI | No | No | No | No | No |
-| Cisco AI Defense | No | No | No | No | No |
-| CalypsoAI CASI | No | No | No | No | No |
-| Guardion AI | No | No | No | No | No |
-| JailbreakBench | Yes | No — jailbreaks only | Yes | Yes | No |
-| **GarakBoard** | **Yes** | **Yes — 150+ probes** | **Yes** | **Yes** | **Yes** |
+Where academic benchmarks like HELM Safety cover static safety scenarios, GarakBoard focuses on adversarial probes — jailbreaks, prompt injection, encoding attacks — and is designed to be self-hosted, extended with new probe categories, and run against private models that never leave your environment.
 
 ## Features
 
@@ -72,9 +13,9 @@ JailbreakBench is the closest to GarakBoard in spirit: open source, reproducible
 - **Leaderboard UI** — filterable table with per-model drill-down showing probe-level breakdowns (Gradio, `localhost:7860`)
 - **Manual run triggering** — `POST /api/runs` with a model UUID and optional probe category list; status polling included
 - **Async job queue** — Celery + Redis with per-model token-bucket rate limiting and automatic 429 retry with exponential back-off
-- **Zero direct cost** — targets OpenRouter free-tier models (`*:free`) exclusively; no spend required to run the full probe suite
-- **Docker Compose full-stack deployment** — six services (API, worker, Celery Beat, Gradio frontend, PostgreSQL, Redis) in one command
-- **10+ probe categories** — `encoding`, `dan`, `goodside`, `promptinject`, `malwaregen`, `continuation`, `lmrc`, `leakreplay`, `snowball`, `badchars`
+- **Zero direct cost** — targets OpenRouter free-tier models exclusively; no spend required to run the full probe suite
+- **Docker Compose full-stack deployment** — one command starts API, worker, Celery Beat, Gradio frontend, PostgreSQL, and Redis
+- **10 probe categories** — `encoding`, `dan`, `goodside`, `promptinject`, `malwaregen`, `continuation`, `lmrc`, `leakreplay`, `snowball`, `badchars`
 
 ## Prerequisites
 
@@ -87,8 +28,8 @@ JailbreakBench is the closest to GarakBoard in spirit: open source, reproducible
 ### 1. Clone and activate the environment
 
 ```bash
-git clone https://github.com/your-org/open-llm-sec.git
-cd open-llm-sec
+git clone https://github.com/JakeBx/garak-board.git
+cd garak-board
 conda env create -f environment.yml
 conda activate garakboard
 ```
@@ -127,7 +68,7 @@ Both containers must be running before you start the API or worker. You can veri
 PYTHONPATH=src python scripts/seed_models.py
 ```
 
-This inserts the 27 OpenRouter free-tier models into your local database. The script is idempotent — running it again skips models that already exist.
+This inserts 5 OpenRouter free-tier models into your local database. The script is idempotent — running it again skips models that already exist.
 
 ### 5. Start the API server
 
@@ -153,22 +94,20 @@ PYTHONPATH=src python -m garakboard.frontend.gradio_app
 
 Open **http://localhost:7860** to access the dashboard.
 
-### Summary of running services
+### Running services
 
 | Service | URL |
 |---------|-----|
 | Gradio Dashboard | http://localhost:7860 |
 | FastAPI | http://localhost:8000 |
 | Swagger UI | http://localhost:8000/docs |
-| PostgreSQL | localhost:5433 (user: garakboard, pass: set via `POSTGRES_PASSWORD` env) |
+| PostgreSQL | localhost:5432 |
 | Redis | localhost:6379 |
 
 ## Running the Test Suite
 
-All 121 tests run from the repo root using the `conda` tool to ensure the correct environment:
-
 ```bash
-# All tests (full suite)
+# All tests
 PYTHONPATH=src conda run -n garakboard pytest tests/ -v
 
 # Unit tests only
@@ -176,23 +115,12 @@ PYTHONPATH=src conda run -n garakboard pytest tests/unit/ -v
 
 # Integration tests only
 PYTHONPATH=src conda run -n garakboard pytest tests/integration/ -v
-```
 
-To run a specific test file:
-
-```bash
-PYTHONPATH=src conda run -n garakboard pytest tests/unit/test_models.py -v
-```
-
-To run with coverage:
-
-```bash
+# With coverage
 PYTHONPATH=src conda run -n garakboard pytest tests/ --cov=garakboard --cov-report=term-missing
 ```
 
 ## Running the Full Stack (Docker Compose)
-
-Docker Compose starts all six services: API, worker, Gradio dashboard, PostgreSQL, Redis, and pgAdmin.
 
 ### 1. Configure environment
 
@@ -206,8 +134,6 @@ cp docker/.env.docker docker/.env
 ```bash
 docker compose --env-file docker/.env -f docker/docker-compose.yml up --build
 ```
-
-On first run this will build the API and worker images. Subsequent starts are faster.
 
 ### 3. Seed the model catalogue
 
@@ -223,17 +149,13 @@ docker compose -f docker/docker-compose.yml exec api python /app/scripts/seed_mo
 | FastAPI | http://localhost:8000 |
 | Swagger UI | http://localhost:8000/docs |
 | pgAdmin | http://localhost:5050 |
+| Flower (Celery) | http://localhost:5555 |
 
 ### 5. Tear down
 
 ```bash
 docker compose -f docker/docker-compose.yml down
-```
-
-Add `-v` to also remove named volumes (deletes all database data):
-
-```bash
-docker compose -f docker/docker-compose.yml down -v
+# Add -v to also remove volumes (deletes all database data)
 ```
 
 ## Running Your First Scan
@@ -243,8 +165,6 @@ docker compose -f docker/docker-compose.yml down -v
 ```bash
 curl http://localhost:8000/api/models | python -m json.tool
 ```
-
-Pick any model's `id` (UUID format, e.g. `a1b2c3d4-...`).
 
 ### Step 2 — Submit a scan job
 
@@ -256,7 +176,7 @@ curl -X POST http://localhost:8000/api/runs \
   -d '{"model_id": "MODEL_UUID", "probe_categories": ["encoding"]}'
 ```
 
-This submits an "encoding" probe scan against the chosen model. The endpoint returns immediately with a `run_id`. Typical encoding scans take 5–15 minutes depending on model size.
+The endpoint returns immediately with a `run_id`. Encoding scans typically take 5–15 minutes.
 
 ### Step 3 — Poll run status
 
@@ -266,7 +186,7 @@ Replace `RUN_ID` with the UUID returned in Step 2:
 curl http://localhost:8000/api/runs/RUN_ID
 ```
 
-Status progression: `pending` → `running` → `completed` (or `failed`). Repeat until status is `completed`.
+Status progression: `pending` → `running` → `completed` (or `failed`).
 
 ### Step 4 — View the leaderboard
 
@@ -274,27 +194,28 @@ Status progression: `pending` → `running` → `completed` (or `failed`). Repea
 curl "http://localhost:8000/api/leaderboard?probe_category=encoding"
 ```
 
-Or open **http://localhost:7860** in your browser for the full Gradio dashboard with interactive tables and probe breakdowns per model.
+Or open **http://localhost:7860** for the Gradio dashboard with interactive tables and per-model probe breakdowns.
 
-### Probe categories available
-
-Use any of these as the `probe_categories` value in the scan request:
+### Probe categories
 
 | Category | Description |
 |----------|-------------|
-| `encoding` | Token manipulation and injection |
-| `prompt_injection` | Direct prompt injection attacks |
-| `xss` | Cross-site scripting via model output |
-| `问她` | General safety |
-| `misinformation` | Disinformation detection |
-| `privacy` | Data leakage probes |
-| `hallucination` | Confabulation and fact fabrication |
+| `encoding` | Encoding-based token manipulation and injection |
+| `promptinject` | Direct prompt injection attacks |
+| `dan` | "Do Anything Now" jailbreak variants |
+| `goodside` | Gandalf-style prompt override attacks |
+| `malwaregen` | Malware and exploit code generation |
+| `leakreplay` | Training data extraction and replay |
+| `lmrc` | LM Risk Cards — diverse harm categories |
+| `continuation` | Harmful text completion |
+| `snowball` | Snowballing hallucination and confabulation |
+| `badchars` | Unusual character and token handling |
 
-To scan across multiple categories, pass an array: `"probe_categories": ["encoding", "prompt_injection"]`.
+To scan across multiple categories, pass an array: `"probe_categories": ["encoding", "dan"]`.
 
 ## API Reference
 
-Full interactive documentation is available at **http://localhost:8000/docs** (Swagger UI).
+Full interactive documentation at **http://localhost:8000/docs**.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -307,7 +228,7 @@ Full interactive documentation is available at **http://localhost:8000/docs** (S
 | `GET` | `/api/leaderboard` | Leaderboard with optional filters |
 | `GET` | `/api/leaderboard/{model_id}` | Per-model probe breakdown |
 
-### Query parameters for `/api/leaderboard`
+#### Leaderboard query parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -315,12 +236,6 @@ Full interactive documentation is available at **http://localhost:8000/docs** (S
 | `model_id` | UUID | — | Filter to a single model |
 | `page` | int | 1 | Page number |
 | `page_size` | int | 25 | Results per page (max 100) |
-
-### Example: leaderboard filtered by category
-
-```bash
-curl "http://localhost:8000/api/leaderboard?probe_category=xss&page_size=10"
-```
 
 ## Project Structure
 
@@ -332,55 +247,26 @@ open-llm-sec/
 │   ├── config.py               # Pydantic Settings (env vars)
 │   ├── database.py             # SQLAlchemy engine + SessionLocal, init_db()
 │   ├── models/                 # SQLAlchemy ORM models
-│   │   ├── model.py            # Model (registered LLM endpoint)
-│   │   ├── run.py              # Run (scan job)
-│   │   ├── probe_result.py     # ProbeResult (per-probe scores)
-│   │   ├── attempt.py          # Attempt (individual probe attempts)
-│   │   └── probe_run_queue.py  # ProbeRunQueue (worker queue)
 │   ├── schemas/                # Pydantic request/response schemas
 │   ├── api/
 │   │   ├── app.py              # FastAPI app factory
-│   │   ├── deps.py             # Dependency injection helpers
-│   │   └── routers/
-│   │       ├── health.py       # GET /api/health
-│   │       ├── models.py        # GET /api/models
-│   │       ├── runs.py         # POST/GET /api/runs
-│   │       └── leaderboard.py  # GET /api/leaderboard
+│   │   └── routers/            # health, models, runs, leaderboard
 │   ├── ingest/
-│   │   └── jsonl_parser.py    # garak JSONL → DB (attempt + probe_result)
+│   │   └── jsonl_parser.py     # garak JSONL → DB
 │   ├── worker/
-│   │   ├── celery_app.py       # Celery app instance
-│   │   ├── tasks.py            # run_scan task + publish_run_job
+│   │   ├── celery_app.py       # Celery app + Beat schedule
+│   │   ├── tasks.py            # run_scan + discover_and_schedule_scans
 │   │   ├── garak_runner.py     # Subprocess wrapper for garak CLI
 │   │   └── rate_limiter.py     # Redis token-bucket rate limiter
 │   └── frontend/
-│       └── gradio_app.py       # Gradio dashboard UI
+│       └── gradio_app.py       # Gradio dashboard
 ├── docker/
-│   ├── Dockerfile.api          # API container
-│   ├── Dockerfile.worker       # Celery worker container
-│   ├── docker-compose.yml      # 6-service stack
-│   └── .env.docker             # Env template for Docker
-├── tests/                      # 121 passing tests
-│   ├── conftest.py             # Pytest fixtures
-│   ├── unit/                   # Unit tests
-│   └── integration/             # API integration tests
-├── plans/
-│   ├── scope.md                # Phase 1 scope and goals
-│   └── design.md               # Architecture and design decisions
-├── environment.yml             # Conda environment spec
-├── pyproject.toml              # Project metadata
-├── .env.example                # Env var template
-└── README.md                   # This file
+│   ├── Dockerfile.api
+│   ├── Dockerfile.worker
+│   ├── docker-compose.yml
+│   └── .env.docker
+├── tests/                      # 151 tests (unit + integration)
+├── environment.yml
+├── pyproject.toml
+└── .env.example
 ```
-
-## Phase 2 Notes
-
-The following are intentionally deferred to Phase 2:
-
-- **GKE deployment** — The architecture is designed for Google Kubernetes Engine. All configuration is env-var driven, workers are stateless, and rate-limit coordination is managed through Redis. To migrate to GKE, containerise the API and worker images, apply the Kubernetes manifests, and point `DATABASE_URL` and `REDIS_URL` at managed services (Cloud SQL + Memorystore).
-
-- **Scheduled scan runs (Celery Beat)** — Currently all scans are triggered via `POST /api/runs`. Phase 2 will add Celery Beat periodic tasks to run weekly probe sweeps across the full model catalogue automatically.
-
-- **Agentic model discovery** — The model catalogue is seeded manually via `scripts/seed_models.py`. Phase 2 will introduce an automated discovery service that queries the OpenRouter API periodically, detects newly available free-tier models, and registers them in the database without manual intervention.
-
-- **Enhanced leaderboard analytics** — Probe result aggregation and trend tracking over time will be added in Phase 2 to support longitudinal security benchmarking.
