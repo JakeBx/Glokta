@@ -19,7 +19,7 @@ Required env vars:
     HF_TOKEN         — HuggingFace write API token
 
 Optional env vars (resolved via .env):
-    DATABASE_URL     — defaults to postgresql://garakboard:changeme@localhost:5432/garakboard
+    DATABASE_URL     — required; set via .env or environment variable (no default in code)
 """
 
 import sys
@@ -30,7 +30,7 @@ import argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from garakboard.config import settings
-from garakboard.database import SessionLocal, init_db
+from garakboard.database import SessionLocal, init_db, migrate_db
 from garakboard.models import Model, Run, ProbeResult
 
 
@@ -141,6 +141,7 @@ def main():
     print()
 
     init_db()
+    migrate_db()
     session = SessionLocal()
     try:
         print("  Querying models...", end=" ", flush=True)
@@ -178,9 +179,14 @@ def main():
         return
 
     print()
-    print(f"  Pushing to hub: {hf_repo} ...", end=" ", flush=True)
-    dataset_dict.push_to_hub(hf_repo, token=hf_token)
-    print("done")
+    # HuggingFace DatasetDict.push_to_hub() requires all splits to share the
+    # same schema.  Since models/runs/probe_results have different schemas, we
+    # push each table as a separate dataset configuration (named config) within
+    # the same repo.  On the Hub this appears as three selectable configs.
+    for config_name, ds in dataset_dict.items():
+        print(f"  Pushing config '{config_name}' ({len(ds)} rows) ...", end=" ", flush=True)
+        ds.push_to_hub(hf_repo, config_name=config_name, token=hf_token)
+        print("done")
 
     print()
     print(f"✓ Dataset pushed to https://huggingface.co/datasets/{hf_repo}")

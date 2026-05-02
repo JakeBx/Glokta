@@ -19,10 +19,23 @@ from garakboard.schemas import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-def _all_complete_runs_subquery():
-    """Return a subquery selecting all complete run ids and their model_ids."""
+def _latest_run_subquery():
+    max_ts = (
+        select(
+            Run.model_id,
+            func.max(Run.created_at).label("max_created_at"),
+        )
+        .where(Run.status == "complete")
+        .group_by(Run.model_id)
+        .subquery()
+    )
     return (
         select(Run.id.label("id"), Run.model_id)
+        .join(
+            max_ts,
+            (Run.model_id == max_ts.c.model_id)
+            & (Run.created_at == max_ts.c.max_created_at),
+        )
         .where(Run.status == "complete")
         .subquery()
     )
@@ -46,7 +59,7 @@ def get_leaderboard(
     db: Session = Depends(get_db),
 ) -> LeaderboardResponse:
     """Paginated leaderboard — one row per (model, probe_category) from each model's most recent complete run."""
-    latest_run = _all_complete_runs_subquery()
+    latest_run = _latest_run_subquery()
 
     # Correlated subquery: triggered_by of the most recent complete run per model
     latest_origin = (
@@ -117,16 +130,17 @@ def get_model_detail(model_id: UUID, db: Session = Depends(get_db)) -> ModelDeta
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
 
-    complete_run_ids = (
-        db.query(Run.id)
+    run = (
+        db.query(Run)
         .filter(Run.model_id == model_id, Run.status == "complete")
-        .subquery()
+        .order_by(Run.created_at.desc())
+        .first()
     )
 
     probe_results = (
-        db.query(ProbeResult)
-        .filter(ProbeResult.run_id.in_(complete_run_ids))
-        .all()
+        db.query(ProbeResult).filter(ProbeResult.run_id == run.id).all()
+        if run
+        else []
     )
 
     if not probe_results:

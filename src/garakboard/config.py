@@ -1,4 +1,9 @@
-"""Application configuration via Pydantic Settings."""
+"""Application configuration via Pydantic Settings.
+
+All secrets (DATABASE_URL, OPENROUTER_API_KEY, HF_TOKEN) must be supplied via
+environment variables or a .env file — never hard-coded in source.  Copy
+.env.example to .env and fill in real values before running.
+"""
 
 import os
 
@@ -13,8 +18,8 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # Database — required; no default to prevent silent localhost mishaps
-    database_url: str = "postgresql://garakboard:changeme@localhost:5432/garakboard"
+    # Database — no default; must be set via DATABASE_URL env var / .env
+    database_url: str = ""
 
     # Redis — required; no default to prevent silent localhost mishaps
     redis_url: str = "redis://localhost:6379/0"
@@ -39,11 +44,25 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = True
     scheduler_top_n_models: int = 20
     scheduler_scan_ttl_days: int = 7
-    openrouter_stats_url: str = "https://openrouter.ai/api/v1/models"
+    scheduler_max_scan_cost_usd: float = 10.0  # per-model scan cost cap; None disables
+    openrouter_rankings_url: str = "https://openrouter.ai/rankings"
+    openrouter_catalog_url: str = "https://openrouter.ai/api/v1/models"
 
     # HuggingFace Dataset sync — optional, only needed for export/import scripts
     hf_dataset_repo: str = ""  # e.g. "your-username/open-llm-sec-leaderboard"
     hf_token: str = ""         # HuggingFace API token (write for export, read for private import)
+
+    @field_validator("database_url")
+    @classmethod
+    def database_url_must_be_set(cls, v: str) -> str:
+        """Raise at startup if DATABASE_URL is missing outside of test runs."""
+        if not v and not os.environ.get("TESTING"):
+            raise ValueError(
+                "DATABASE_URL must be set. "
+                "Add it to your .env file or export it as an environment variable. "
+                "Example: postgresql://garakboard:<password>@localhost:5432/garakboard"
+            )
+        return v
 
     @field_validator("openrouter_api_key")
     @classmethod

@@ -9,12 +9,12 @@ from celery.exceptions import Retry
 from sqlalchemy.exc import OperationalError
 
 from garakboard.worker.celery_app import celery_app
-from garakboard.worker.garak_runner import build_garak_config, run_garak
+from garakboard.worker.garak_runner import build_garak_config, compute_remaining_probes, run_garak
 from garakboard.worker.openrouter_client import fetch_top_models
 from garakboard.worker.rate_limiter import get_run_lock
 from garakboard.ingest.jsonl_parser import ingest_jsonl_file
 from garakboard.database import SessionLocal
-from garakboard.models import Run, Model, ProbeRunQueue
+from garakboard.models import Run, Model, ProbeResult, ProbeRunQueue
 from garakboard.config import settings
 
 logger = logging.getLogger(__name__)
@@ -71,11 +71,33 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
         if not lock.acquire(model_name):
             logger.warning(f"Run already active for {model_name}, requeueing...")
             run.status = "pending"
+            run.completed_at = None
             db.commit()
             raise self.retry(exc=Exception("Model already running"), countdown=30)
         acquired = True
 
-        # 3. Build garak config and run in temp directory
+        # 3. Compute which probes still need running (resume support)
+        done_probes = {
+            row[0]
+            for row in db.query(ProbeResult.probe_name)
+            .filter(ProbeResult.run_id == run_id)
+            .distinct()
+            .all()
+        }
+        remaining = compute_remaining_probes(
+            done_probes,
+            probe_categories if probe_categories else [],
+        )
+
+        if not remaining:
+            logger.info(f"Run {run_id}: all probes already complete, marking done")
+            run.status = "complete"
+            if run.completed_at is None:
+                run.completed_at = datetime.now(timezone.utc)
+            db.commit()
+            return {"probe_results_count": len(done_probes), "skipped": True}
+
+        # 4. Build garak config and run in temp directory
         with tempfile.TemporaryDirectory() as output_dir:
             config = build_garak_config(
                 model_name=model_name,
@@ -84,6 +106,7 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
                 parallel_attempts=settings.garak_parallel_attempts,
                 rpm_limit=settings.openrouter_rpm_limit,
                 soft_probe_prompt_cap=settings.garak_soft_probe_prompt_cap,
+                probe_spec_override=",".join(remaining),
             )
 
             try:
@@ -98,6 +121,7 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
                 if "429" in exc_text or "rate limit" in exc_text.lower() or "rate-limited" in exc_text.lower():
                     logger.warning(f"Rate limit hit for run {run_id}, retrying...")
                     run.status = "pending"
+                    run.completed_at = None
                     db.commit()
                     # Release lock before requeueing — no point holding the model slot
                     # during the countdown. The retried task will re-acquire.
@@ -113,11 +137,23 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
                 db.commit()
                 return {"error": str(exc)}
 
-            # 4. Ingest JSONL output
+            # 5. Ingest JSONL output (appended to any existing probe_results for this run)
             result = ingest_jsonl_file(jsonl_path, run_id, db)
             db.commit()
 
-        # 5. Mark run as complete
+        # 5. Mark run as complete — but if garak exited 0 with an empty JSONL
+        # (e.g. LiteLLM routing failure printed "Unrecoverable error" and exit 0)
+        # we treat that as a failure. No probe results AND no attempts is never
+        # a legitimate success.
+        if result.probe_results_count == 0 and result.attempts_count == 0:
+            logger.error(
+                f"Run {run_id} produced no probe results or attempts — marking failed"
+            )
+            run.status = "failed"
+            run.completed_at = datetime.now(timezone.utc)
+            db.commit()
+            return {"error": "empty_ingest", "probe_results_count": 0, "attempts_count": 0}
+
         run.status = "complete"
         run.completed_at = datetime.now(timezone.utc)
         db.commit()
@@ -148,6 +184,7 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
             run = db.query(Run).filter(Run.id == run_id).first()
             if run:
                 run.status = "pending"
+                run.completed_at = None
                 db.commit()
                 # Reset probe queue entries stuck in "running" status
                 db.query(ProbeRunQueue).filter(
@@ -203,21 +240,34 @@ def discover_and_schedule_scans() -> dict:
     if not settings.scheduler_enabled:
         return {"queued": 0, "skipped": 0}
 
-    top_models = fetch_top_models(settings.openrouter_api_key, settings.scheduler_top_n_models)
+    top_models = fetch_top_models(
+        api_key=settings.openrouter_api_key,
+        top_n=settings.scheduler_top_n_models,
+        max_scan_cost_usd=settings.scheduler_max_scan_cost_usd,
+    )
 
     db = SessionLocal()
     queued = 0
     skipped = 0
 
     try:
+        from garakboard.worker.garak_runner import DEFAULT_PROBE_CATEGORIES
         staleness_cutoff = datetime.now(timezone.utc) - timedelta(days=settings.scheduler_scan_ttl_days)
 
         for model_data in top_models:
-            model_name = model_data.get("id", "")
-            if not model_name:
+            openrouter_id = model_data.get("id", "")
+            if not openrouter_id:
                 continue
 
-            # Upsert model record
+            # LiteLLM needs the "openrouter/" prefix to route through OpenRouter
+            # rather than dispatching to the native provider (which rejects our key).
+            model_name = (
+                openrouter_id
+                if openrouter_id.startswith("openrouter/")
+                else f"openrouter/{openrouter_id}"
+            )
+
+            # Upsert model record (store the prefixed name that the worker actually uses)
             model = db.query(Model).filter(Model.name == model_name).first()
             if model is None:
                 from datetime import date
@@ -246,7 +296,7 @@ def discover_and_schedule_scans() -> dict:
                     skipped += 1
                     continue
 
-            # Queue a scheduled scan
+            # Queue a scheduled scan with the full default probe set
             run = Run(
                 model_id=model.id,
                 triggered_by="scheduled",
@@ -254,7 +304,7 @@ def discover_and_schedule_scans() -> dict:
             )
             db.add(run)
             db.flush()
-            publish_run_job(str(run.id), model_name, [])
+            publish_run_job(str(run.id), model_name, DEFAULT_PROBE_CATEGORIES)
             queued += 1
 
         db.commit()

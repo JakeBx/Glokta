@@ -27,6 +27,24 @@ DEFAULT_PROBE_CATEGORIES = [
 ]
 
 
+def compute_remaining_probes(done: set[str], probe_categories: list[str]) -> list[str]:
+    """Return full garak probe names not yet represented in done.
+
+    done: set of DB probe_name values e.g. {"encoding.InjectBase64", "dan.Dan_11_0"}
+    Returns full "probes.encoding.InjectBase64" style names for probes still to run.
+    """
+    from garak import _plugins
+
+    result = []
+    for full_name, _ in _plugins.enumerate_plugins("probes"):
+        # full_name: "probes.encoding.InjectBase64" → db_name: "encoding.InjectBase64"
+        db_name = full_name[len("probes."):]
+        category = db_name.split(".")[0]
+        if category in probe_categories and db_name not in done:
+            result.append(full_name)
+    return result
+
+
 def build_garak_config(
     model_name: str,
     probe_categories: list[str],
@@ -34,6 +52,7 @@ def build_garak_config(
     parallel_attempts: int = 1,
     rpm_limit: int | None = None,
     soft_probe_prompt_cap: int | None = None,
+    probe_spec_override: str | None = None,
 ) -> dict:
     """
     Build a garak configuration dict suitable for writing as YAML.
@@ -50,6 +69,7 @@ def build_garak_config(
         dict suitable for yaml.dump()
     """
     probes = probe_categories if probe_categories else DEFAULT_PROBE_CATEGORIES
+    spec = probe_spec_override if probe_spec_override is not None else ",".join(probes)
 
     config: dict = {
         "system": {
@@ -58,7 +78,7 @@ def build_garak_config(
         "plugins": {
             "target_type": "litellm",
             "target_name": model_name,
-            "probe_spec": ",".join(probes),
+            "probe_spec": spec,
             "generators": {
                 "litellm": {
                     # garak default stop=["#", ";"] truncates markdown-prefixed

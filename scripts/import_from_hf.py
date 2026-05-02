@@ -23,7 +23,7 @@ Required env vars:
     HF_TOKEN         — HuggingFace read API token (only required for private repos)
 
 Optional env vars (resolved via .env):
-    DATABASE_URL     — defaults to postgresql://garakboard:changeme@localhost:5432/garakboard
+    DATABASE_URL     — required; set via .env or environment variable (no default in code)
 """
 
 import sys
@@ -36,7 +36,7 @@ from datetime import datetime, date
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from garakboard.config import settings
-from garakboard.database import SessionLocal, init_db
+from garakboard.database import SessionLocal, init_db, migrate_db
 from garakboard.models import Model, Run, ProbeResult
 
 
@@ -224,26 +224,27 @@ def main():
     print("  Loading dataset from HuggingFace Hub...", end=" ", flush=True)
     try:
         from datasets import load_dataset
-        dataset_dict = load_dataset(hf_repo, token=hf_token)
+        # Each table was pushed as a separate named config (config_name).
+        # Load them independently so different schemas are handled correctly.
+        models_ds = load_dataset(hf_repo, name="models", token=hf_token)
+        runs_ds = load_dataset(hf_repo, name="runs", token=hf_token)
+        probe_results_ds = load_dataset(hf_repo, name="probe_results", token=hf_token)
     except Exception as e:
         print(f"\n✗ Failed to load dataset: {e}")
         sys.exit(1)
     print("done")
 
-    # Validate expected splits
-    for split_name in ("models", "runs", "probe_results"):
-        if split_name not in dataset_dict:
-            print(f"✗ Expected split '{split_name}' not found in dataset. Available: {list(dataset_dict.keys())}")
-            sys.exit(1)
-
-    model_rows = dataset_split_to_rows(dataset_dict["models"])
-    run_rows = dataset_split_to_rows(dataset_dict["runs"])
-    probe_result_rows = dataset_split_to_rows(dataset_dict["probe_results"])
+    # Each load_dataset() returns a DatasetDict with a single "train" split
+    # (default when no split name was specified during push_to_hub).
+    model_rows = dataset_split_to_rows(models_ds["train"])
+    run_rows = dataset_split_to_rows(runs_ds["train"])
+    probe_result_rows = dataset_split_to_rows(probe_results_ds["train"])
 
     print(f"  Downloaded: {len(model_rows)} models, {len(run_rows)} runs, {len(probe_result_rows)} probe_results")
     print()
 
     init_db()
+    migrate_db()
     session = SessionLocal()
     try:
         # Import in FK dependency order: models → runs → probe_results

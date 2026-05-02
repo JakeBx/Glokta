@@ -518,6 +518,110 @@ def test_run_scan_returns_error_when_run_not_found():
         assert result.result == {"error": "run_not_found"}
 
 
+def test_run_scan_calls_garak_with_remaining_probes_only(db_session):
+    """When a run already has probe_results, run_scan passes only unfinished probes to garak."""
+    from garakboard.models import Run, Model, ProbeResult
+    from garakboard.worker.garak_runner import build_garak_config
+
+    model = Model(name="test-model-resume", provider="openrouter", snapshot_date=date.today())
+    db_session.add(model)
+    db_session.flush()
+    run = Run(model_id=model.id, status="pending")
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(ProbeResult(
+        run_id=run.id, probe_name="dan.Dan_11_0", probe_category="dan",
+        detector="det", pass_count=5, fail_count=2, score=None,
+    ))
+    db_session.commit()
+    run_id = str(run.id)
+
+    captured_spec = []
+
+    def fake_build_config(*args: object, probe_spec_override: str | None = None, **kwargs: object) -> dict:
+        captured_spec.append(probe_spec_override)
+        return build_garak_config(*args, probe_spec_override=probe_spec_override, **kwargs)
+
+    with patch("garakboard.worker.tasks.SessionLocal", return_value=db_session), \
+         patch("garakboard.worker.tasks.get_run_lock", return_value=_mock_run_lock()), \
+         patch("garakboard.worker.tasks.build_garak_config", side_effect=fake_build_config), \
+         patch("garakboard.worker.tasks.run_garak") as mock_garak, \
+         patch("garakboard.worker.tasks.ingest_jsonl_file") as mock_ingest:
+        mock_garak.return_value = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False).name
+        mock_ingest.return_value = MagicMock(probe_results_count=1, attempts_count=1)
+        from garakboard.worker.tasks import run_scan
+        run_scan.apply(args=[run_id, "openrouter/test/model", ["dan"]])
+
+    assert len(captured_spec) == 1
+    assert captured_spec[0] is not None, "probe_spec_override should be set when some probes are done"
+    assert "probes.dan.Dan_11_0" not in captured_spec[0]
+
+
+def test_run_scan_skips_garak_when_all_probes_done(db_session):
+    """If all expected probes already have results, garak is NOT called and run is marked complete."""
+    from garakboard.models import Run, Model
+
+    model = Model(name="test-model-skip-garak", provider="openrouter", snapshot_date=date.today())
+    db_session.add(model)
+    db_session.flush()
+    run = Run(model_id=model.id, status="pending")
+    db_session.add(run)
+    db_session.commit()
+    run_id = str(run.id)
+
+    with patch("garakboard.worker.tasks.SessionLocal", return_value=db_session), \
+         patch("garakboard.worker.tasks.get_run_lock", return_value=_mock_run_lock()), \
+         patch("garakboard.worker.tasks.compute_remaining_probes", return_value=[]), \
+         patch("garakboard.worker.tasks.run_garak") as mock_garak, \
+         patch("garakboard.worker.tasks.ingest_jsonl_file"):
+        from garakboard.worker.tasks import run_scan
+        run_scan.apply(args=[run_id, "openrouter/test/model", ["encoding"]])
+
+    mock_garak.assert_not_called()
+    db_session.expire_all()
+    run = db_session.query(Run).filter(Run.id == run_id).first()
+    assert run.status == "complete"
+
+
+def test_run_scan_clears_completed_at_on_429_retry(db_session):
+    """On 429 retry, completed_at is cleared to None before re-queuing."""
+    from garakboard.models import Run, Model
+
+    model = Model(name="test-model-retry-ts", provider="openrouter", snapshot_date=date.today())
+    db_session.add(model)
+    db_session.flush()
+    stale_ts = datetime(2026, 5, 1, 3, 20, tzinfo=timezone.utc)
+    run = Run(model_id=model.id, status="pending", completed_at=stale_ts)
+    db_session.add(run)
+    db_session.commit()
+    run_id = str(run.id)
+
+    # Capture completed_at at the moment of the 429 commit, before max-retries exhaustion
+    completed_at_on_retry: list = []
+
+    original_commit = db_session.commit
+
+    def capturing_commit() -> None:
+        original_commit()
+        db_session.expire_all()
+        r = db_session.query(Run).filter(Run.id == run_id).first()
+        if r and r.status == "pending":
+            completed_at_on_retry.append(r.completed_at)
+
+    with patch("garakboard.worker.tasks.SessionLocal", return_value=db_session), \
+         patch("garakboard.worker.tasks.get_run_lock", return_value=_mock_run_lock()), \
+         patch("garakboard.worker.tasks.compute_remaining_probes", return_value=["probes.encoding.InjectBase64"]), \
+         patch("garakboard.worker.tasks.run_garak") as mock_garak, \
+         patch.object(db_session, "commit", side_effect=capturing_commit):
+        mock_garak.side_effect = RuntimeError("429 rate limit exceeded")
+        from garakboard.worker.tasks import run_scan
+        run_scan.apply(args=[run_id, "openrouter/test/model", ["encoding"]], throw=False)
+
+    # The 429 path must have committed with status=pending and completed_at=None
+    assert len(completed_at_on_retry) >= 1, "429 retry path never committed status=pending"
+    assert completed_at_on_retry[0] is None
+
+
 def test_run_scan_marks_failed_when_ingest_returns_zero_results(db_session):
     """If garak exits 0 but the JSONL contains no eval/attempt entries, the run
     must be marked 'failed' — not 'complete'. Garak's generator can silently
