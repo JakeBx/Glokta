@@ -1,5 +1,6 @@
 """Utilities for spawning and managing garak subprocess runs."""
 
+import functools
 import logging
 import os
 import subprocess
@@ -27,20 +28,25 @@ DEFAULT_PROBE_CATEGORIES = [
 ]
 
 
+@functools.cache
+def _all_garak_probe_names() -> tuple[str, ...]:
+    """Return all installed garak probe full names. Cached after first call."""
+    from garak import _plugins
+    return tuple(name for name, _ in _plugins.enumerate_plugins("probes"))
+
+
 def compute_remaining_probes(done: set[str], probe_categories: list[str]) -> list[str]:
     """Return full garak probe names not yet represented in done.
 
     done: set of DB probe_name values e.g. {"encoding.InjectBase64", "dan.Dan_11_0"}
     Returns full "probes.encoding.InjectBase64" style names for probes still to run.
     """
-    from garak import _plugins
-
+    category_set = set(probe_categories)
     result = []
-    for full_name, _ in _plugins.enumerate_plugins("probes"):
-        # full_name: "probes.encoding.InjectBase64" → db_name: "encoding.InjectBase64"
-        db_name = full_name[len("probes."):]
+    for full_name in _all_garak_probe_names():
+        db_name = full_name.removeprefix("probes.")
         category = db_name.split(".")[0]
-        if category in probe_categories and db_name not in done:
+        if category in category_set and db_name not in done:
             result.append(full_name)
     return result
 

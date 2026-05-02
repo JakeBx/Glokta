@@ -9,7 +9,7 @@ from celery.exceptions import Retry
 from sqlalchemy.exc import OperationalError
 
 from garakboard.worker.celery_app import celery_app
-from garakboard.worker.garak_runner import build_garak_config, compute_remaining_probes, run_garak
+from garakboard.worker.garak_runner import DEFAULT_PROBE_CATEGORIES, build_garak_config, compute_remaining_probes, run_garak
 from garakboard.worker.openrouter_client import fetch_top_models
 from garakboard.worker.rate_limiter import get_run_lock
 from garakboard.ingest.jsonl_parser import ingest_jsonl_file
@@ -86,7 +86,7 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
         }
         remaining = compute_remaining_probes(
             done_probes,
-            probe_categories if probe_categories else [],
+            probe_categories if probe_categories else DEFAULT_PROBE_CATEGORIES,
         )
 
         if not remaining:
@@ -251,7 +251,6 @@ def discover_and_schedule_scans() -> dict:
     skipped = 0
 
     try:
-        from garakboard.worker.garak_runner import DEFAULT_PROBE_CATEGORIES
         staleness_cutoff = datetime.now(timezone.utc) - timedelta(days=settings.scheduler_scan_ttl_days)
 
         for model_data in top_models:
