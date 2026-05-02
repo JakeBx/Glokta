@@ -13,6 +13,19 @@ logger = logging.getLogger(__name__)
 # Default timeout — overridden by settings.garak_timeout_seconds at call sites.
 GARAK_TIMEOUT_SECONDS = 3600
 
+DEFAULT_PROBE_CATEGORIES = [
+    "encoding",        # Prompt injection — encoding evasion
+    "dan",             # Jailbreaking — DAN variants
+    "goodside",        # Prompt injection — Riley Goodside techniques
+    "promptinject",    # Prompt injection — HouYi framework
+    "malwaregen",      # Harmful content — malware generation
+    "continuation",    # Harmful content — toxic text continuation
+    "lmrc",            # Safety alignment — Language Model Risk Cards
+    "leakreplay",      # Information leakage — training data memorization
+    "snowball",        # Safety alignment — escalating false claims
+    "badchars",        # Prompt injection — control character evasion
+]
+
 
 def build_garak_config(
     model_name: str,
@@ -36,8 +49,7 @@ def build_garak_config(
     Returns:
         dict suitable for yaml.dump()
     """
-    # If probe_categories is empty, use a default subset safe for testing
-    probes = probe_categories if probe_categories else ["encoding"]
+    probes = probe_categories if probe_categories else DEFAULT_PROBE_CATEGORIES
 
     config: dict = {
         "system": {
@@ -47,6 +59,18 @@ def build_garak_config(
             "target_type": "litellm",
             "target_name": model_name,
             "probe_spec": ",".join(probes),
+            "generators": {
+                "litellm": {
+                    # garak default stop=["#", ";"] truncates markdown-prefixed
+                    # and semicolon-containing responses to empty, producing
+                    # content=None that garak records as null attempts.
+                    "suppressed_params": ["stop"],
+                    # garak default max_tokens=150 starves reasoning models:
+                    # they exhaust budget in reasoning_content and emit no
+                    # content. 2048 gives headroom for reasoning + content.
+                    "max_tokens": 2048,
+                },
+            },
         },
         "reporting": {
             "report_dir": output_dir,
@@ -54,16 +78,14 @@ def build_garak_config(
     }
 
     if rpm_limit is not None:
-        # Pass rate limit through to garak so it respects the OpenRouter plan tier
         config["system"]["generators_options"] = {
             "max_requests_per_minute": rpm_limit,
         }
 
     if soft_probe_prompt_cap is not None:
-        # Both settings belong under `run:` per garak core schema
         config["run"] = {
             "soft_probe_prompt_cap": soft_probe_prompt_cap,
-            "generations": 1,  # 1 response per prompt keeps runs minimal
+            "generations": 1,
         }
 
     return config
@@ -105,7 +127,6 @@ def run_garak(config: dict, api_key: str, timeout: int = GARAK_TIMEOUT_SECONDS) 
             text=True,
             timeout=timeout,
         )
-        # Always log garak output for diagnostics
         if result.stdout:
             logger.info("garak stdout:\n%s", result.stdout[-2000:])
         if result.stderr:
@@ -128,12 +149,10 @@ def run_garak(config: dict, api_key: str, timeout: int = GARAK_TIMEOUT_SECONDS) 
     finally:
         os.unlink(config_path)
 
-    # Find the JSONL output file garak wrote (use rglob for recursive search)
     output_files = list(Path(output_dir).rglob("*.jsonl"))
     if not output_files:
         raise FileNotFoundError(
             f"No JSONL output file found in {output_dir} after garak run"
         )
 
-    # Return the most recently modified file
     return str(max(output_files, key=lambda p: p.stat().st_mtime))

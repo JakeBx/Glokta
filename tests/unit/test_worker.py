@@ -34,7 +34,7 @@ def test_build_garak_config_returns_dict():
 
 
 def test_build_garak_config_sets_model_name():
-    """model_name appears in config under plugins.model_name."""
+    """model_name appears in config under plugins.target_name (LiteLLM generator)."""
     from garakboard.worker.garak_runner import build_garak_config
 
     config = build_garak_config(
@@ -42,7 +42,7 @@ def test_build_garak_config_sets_model_name():
         probe_categories=["encoding"],
         output_dir="/tmp/output",
     )
-    assert config["plugins"]["model_name"] == "openrouter/meta-llama/llama-3-8b-instruct:free"
+    assert config["plugins"]["target_name"] == "openrouter/meta-llama/llama-3-8b-instruct:free"
 
 
 def test_build_garak_config_sets_probe_categories():
@@ -57,8 +57,20 @@ def test_build_garak_config_sets_probe_categories():
     assert config["plugins"]["probe_spec"] == "encoding,malwaregen"
 
 
+def test_build_garak_config_uses_litellm_generator():
+    """Config routes through LiteLLM generator (target_type=litellm)."""
+    from garakboard.worker.garak_runner import build_garak_config
+
+    config = build_garak_config(
+        model_name="openrouter/meta-llama/llama-3-8b-instruct:free",
+        probe_categories=["encoding"],
+        output_dir="/tmp/output",
+    )
+    assert config["plugins"]["target_type"] == "litellm"
+
+
 def test_build_garak_config_sets_rpm_limit():
-    """rpm_limit appears in config under plugins.generators.litellm.rpm."""
+    """rpm_limit is wired into system.generators_options.max_requests_per_minute."""
     from garakboard.worker.garak_runner import build_garak_config
 
     config = build_garak_config(
@@ -67,7 +79,45 @@ def test_build_garak_config_sets_rpm_limit():
         output_dir="/tmp/output",
         rpm_limit=30,
     )
-    assert config["plugins"]["generators"]["litellm"]["rpm"] == 30
+    assert config["system"]["generators_options"]["max_requests_per_minute"] == 30
+
+
+def test_build_garak_config_omits_rpm_limit_when_none():
+    """When rpm_limit is not set, generators_options is absent from config."""
+    from garakboard.worker.garak_runner import build_garak_config
+
+    config = build_garak_config(
+        model_name="openrouter/meta-llama/llama-3-8b-instruct:free",
+        probe_categories=["encoding"],
+        output_dir="/tmp/output",
+    )
+    assert "generators_options" not in config.get("system", {})
+
+
+def test_build_garak_config_suppresses_stop_tokens():
+    """garak default stop=['#', ';'] truncates refusals and markdown responses
+    to empty content. Suppress it globally in the LiteLLM generator config."""
+    from garakboard.worker.garak_runner import build_garak_config
+
+    config = build_garak_config(
+        model_name="openrouter/meta-llama/llama-3-8b-instruct:free",
+        probe_categories=["encoding"],
+        output_dir="/tmp/output",
+    )
+    assert config["plugins"]["generators"]["litellm"]["suppressed_params"] == ["stop"]
+
+
+def test_build_garak_config_raises_max_tokens():
+    """garak default max_tokens=150 starves reasoning models that emit tokens
+    into reasoning_content first. Require ≥2048 for usable output."""
+    from garakboard.worker.garak_runner import build_garak_config
+
+    config = build_garak_config(
+        model_name="openrouter/meta-llama/llama-3-8b-instruct:free",
+        probe_categories=["encoding"],
+        output_dir="/tmp/output",
+    )
+    assert config["plugins"]["generators"]["litellm"]["max_tokens"] >= 2048
 
 
 def test_build_garak_config_sets_parallel_attempts():
@@ -83,16 +133,27 @@ def test_build_garak_config_sets_parallel_attempts():
     assert config["system"]["parallel_attempts"] == 4
 
 
-def test_build_garak_config_uses_encoding_default_when_no_probes():
-    """When probe_categories is empty, defaults to probe_spec='encoding'."""
-    from garakboard.worker.garak_runner import build_garak_config
+def test_build_garak_config_uses_default_categories_when_no_probes():
+    """When probe_categories is empty, fall back to the full DEFAULT_PROBE_CATEGORIES
+    set rather than a single-category encoding scan — empty means 'full default
+    scan', not 'testing subset'."""
+    from garakboard.worker.garak_runner import build_garak_config, DEFAULT_PROBE_CATEGORIES
 
     config = build_garak_config(
         model_name="openrouter/meta-llama/llama-3-8b-instruct:free",
         probe_categories=[],
         output_dir="/tmp/output",
     )
-    assert config["plugins"]["probe_spec"] == "encoding"
+    assert config["plugins"]["probe_spec"] == ",".join(DEFAULT_PROBE_CATEGORIES)
+
+
+def test_default_probe_categories_covers_multiple_dimensions():
+    """DEFAULT_PROBE_CATEGORIES spans jailbreak, injection, harmful-content and more."""
+    from garakboard.worker.garak_runner import DEFAULT_PROBE_CATEGORIES
+    assert "encoding" in DEFAULT_PROBE_CATEGORIES
+    assert "dan" in DEFAULT_PROBE_CATEGORIES
+    assert "malwaregen" in DEFAULT_PROBE_CATEGORIES
+    assert len(DEFAULT_PROBE_CATEGORIES) >= 5
 
 
 def test_build_garak_config_sets_output_dir():
@@ -401,7 +462,7 @@ def test_run_scan_sets_completed_at_on_success(db_session):
          patch("garakboard.worker.tasks.run_garak") as mock_run_garak, \
          patch("garakboard.worker.tasks.ingest_jsonl_file") as mock_ingest:
         mock_run_garak.return_value = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False).name
-        mock_ingest.return_value = MagicMock(probe_results_count=0, attempts_count=0)
+        mock_ingest.return_value = MagicMock(probe_results_count=3, attempts_count=15)
 
         from garakboard.worker.tasks import run_scan
         run_scan.apply(args=[run_id, "openrouter/test/model", ["encoding"]])
@@ -455,3 +516,37 @@ def test_run_scan_returns_error_when_run_not_found():
         from garakboard.worker.tasks import run_scan
         result = run_scan.apply(args=["non-existent-run-id", "openrouter/test/model", ["encoding"]])
         assert result.result == {"error": "run_not_found"}
+
+
+def test_run_scan_marks_failed_when_ingest_returns_zero_results(db_session):
+    """If garak exits 0 but the JSONL contains no eval/attempt entries, the run
+    must be marked 'failed' — not 'complete'. Garak's generator can silently
+    swallow per-probe errors and exit 0 with an empty output file."""
+    from garakboard.models import Run, Model
+
+    model = Model(
+        name="test-model-zero-results",
+        provider="openrouter",
+        snapshot_date=date.today(),
+    )
+    db_session.add(model)
+    db_session.flush()
+
+    run = Run(model_id=model.id, status="pending")
+    db_session.add(run)
+    db_session.commit()
+    run_id = str(run.id)
+
+    with patch("garakboard.worker.tasks.SessionLocal", return_value=db_session), \
+         patch("garakboard.worker.tasks.get_run_lock", return_value=_mock_run_lock()), \
+         patch("garakboard.worker.tasks.run_garak") as mock_run_garak, \
+         patch("garakboard.worker.tasks.ingest_jsonl_file") as mock_ingest:
+        mock_run_garak.return_value = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False).name
+        mock_ingest.return_value = MagicMock(probe_results_count=0, attempts_count=0)
+
+        from garakboard.worker.tasks import run_scan
+        run_scan.apply(args=[run_id, "openrouter/test/model", ["encoding"]])
+
+    db_session.expire_all()
+    run = db_session.query(Run).filter(Run.id == run_id).first()
+    assert run.status == "failed"
