@@ -28,6 +28,7 @@ docker/.env
 .vscode/
 !.vscode/settings.json
 plans/
+.claude/
 
 # garak output
 *.jsonl

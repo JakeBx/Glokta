@@ -53,5 +53,6 @@ class ModelDetailResponse(BaseModel):
     model_id: UUID
     model_name: str
     provider: str
+    run_id: UUID | None = None
     probe_results: list[ProbeResultDetail]
     summary: LeaderboardRow | None = None

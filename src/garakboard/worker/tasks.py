@@ -1,8 +1,11 @@
 """Celery tasks for GarakBoard worker."""
 
+import io
 import logging
 import tempfile
 from datetime import datetime, timedelta, timezone
+
+import yaml
 
 from celery import Task
 from celery.exceptions import Retry
@@ -18,6 +21,10 @@ from garakboard.models import Run, Model, ProbeResult, ProbeRunQueue
 from garakboard.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+class EmptyIngestError(Exception):
+    """Raised when garak exits cleanly but produces no probe results or attempts."""
 
 
 def publish_run_job(run_id: str, model_name: str, probe_categories: list[str]) -> None:
@@ -137,22 +144,33 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
                 db.commit()
                 return {"error": str(exc)}
 
-            # 5. Ingest JSONL output (appended to any existing probe_results for this run)
-            result = ingest_jsonl_file(jsonl_path, run_id, db)
+            # 5. Store run metadata and raw JSONL before the temp dir is cleaned up
+            try:
+                import garak as _garak
+                run.garak_version = _garak.__version__
+                run.garak_config = yaml.dump(config, default_flow_style=False)
+                with open(jsonl_path, "r", encoding="utf-8", errors="replace") as _jf:
+                    run.raw_output = _jf.read()
+                db.flush()
+            except Exception as meta_exc:
+                logger.warning(f"Failed to store run metadata for {run_id}: {meta_exc}")
+
+            # 6. Ingest JSONL output (appended to any existing probe_results for this run)
+            result = ingest_jsonl_file(io.StringIO(run.raw_output) if run.raw_output else jsonl_path, run_id, db)
             db.commit()
 
-        # 5. Mark run as complete — but if garak exited 0 with an empty JSONL
-        # (e.g. LiteLLM routing failure printed "Unrecoverable error" and exit 0)
+        # 7. Mark run as complete — but if garak exited 0 with an empty JSONL
+        # (e.g. REST generator routing failure silently exits 0 with no output)
         # we treat that as a failure. No probe results AND no attempts is never
         # a legitimate success.
         if result.probe_results_count == 0 and result.attempts_count == 0:
-            logger.error(
-                f"Run {run_id} produced no probe results or attempts — marking failed"
-            )
             run.status = "failed"
             run.completed_at = datetime.now(timezone.utc)
             db.commit()
-            return {"error": "empty_ingest", "probe_results_count": 0, "attempts_count": 0}
+            raise EmptyIngestError(
+                f"Run {run_id}: garak exited cleanly but produced zero probe results "
+                "and zero attempts — possible generator or routing failure"
+            )
 
         run.status = "complete"
         run.completed_at = datetime.now(timezone.utc)
@@ -169,7 +187,7 @@ def run_scan(self: Task, run_id: str, model_name: str, probe_categories: list[st
             "attempts_count": result.attempts_count,
         }
 
-    except Retry:
+    except (Retry, EmptyIngestError):
         raise
     except OperationalError as exc:
         # Database connection error — retry with exponential backoff
@@ -302,11 +320,9 @@ def discover_and_schedule_scans() -> dict:
                 status="pending",
             )
             db.add(run)
-            db.flush()
+            db.commit()  # commit before publishing so the worker can find the run
             publish_run_job(str(run.id), model_name, DEFAULT_PROBE_CATEGORIES)
             queued += 1
-
-        db.commit()
     except Exception as exc:
         logger.error(f"discover_and_schedule_scans failed: {exc}")
         db.rollback()

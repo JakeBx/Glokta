@@ -36,19 +36,29 @@ def _all_garak_probe_names() -> tuple[str, ...]:
 
 
 def compute_remaining_probes(done: set[str], probe_categories: list[str]) -> list[str]:
-    """Return full garak probe names not yet represented in done.
+    """Return probe names not yet represented in done, in the short form garak probe_spec expects.
 
     done: set of DB probe_name values e.g. {"encoding.InjectBase64", "dan.Dan_11_0"}
-    Returns full "probes.encoding.InjectBase64" style names for probes still to run.
+    Returns short "encoding.InjectBase64" style names (no "probes." prefix) — this is
+    the format garak's probe_spec config key accepts.
+
+    Probes whose class name ends with "Full" are excluded: they run all their
+    prompts without respecting soft_probe_prompt_cap and make scans prohibitively
+    long at API rate limits.
     """
     category_set = set(probe_categories)
     result = []
     for full_name in _all_garak_probe_names():
         db_name = full_name.removeprefix("probes.")
+        probe_class = db_name.split(".")[-1] if "." in db_name else db_name
         category = db_name.split(".")[0]
-        if category in category_set and db_name not in done:
-            result.append(full_name)
+        if category in category_set and db_name not in done and not probe_class.endswith("Full"):
+            result.append(db_name)
     return result
+
+
+_GENERATOR_NAME = "openrouter-direct"
+_OPENROUTER_URI = "https://openrouter.ai/api/v1/chat/completions"
 
 
 def build_garak_config(
@@ -76,26 +86,38 @@ def build_garak_config(
     """
     probes = probe_categories if probe_categories else DEFAULT_PROBE_CATEGORIES
     spec = probe_spec_override if probe_spec_override is not None else ",".join(probes)
+    # tasks.py always prepends "openrouter/"; REST config needs the raw model ID
+    raw_model = model_name.removeprefix("openrouter/")
 
     config: dict = {
         "system": {
             "parallel_attempts": parallel_attempts,
         },
         "plugins": {
-            "target_type": "litellm",
-            "target_name": model_name,
+            "target_type": "rest",
+            "target_name": _GENERATOR_NAME,
             "probe_spec": spec,
             "generators": {
-                "litellm": {
-                    # garak default stop=["#", ";"] truncates markdown-prefixed
-                    # and semicolon-containing responses to empty, producing
-                    # content=None that garak records as null attempts.
-                    "suppressed_params": ["stop"],
-                    # garak default max_tokens=150 starves reasoning models:
-                    # they exhaust budget in reasoning_content and emit no
-                    # content. 2048 gives headroom for reasoning + content.
-                    "max_tokens": 2048,
-                },
+                "rest": {
+                    "RestGenerator": {
+                        "name": _GENERATOR_NAME,
+                        "uri": _OPENROUTER_URI,
+                        "method": "post",
+                        "headers": {
+                            "Content-Type": "application/json",
+                            "Authorization": "Bearer $KEY",
+                        },
+                        "key_env_var": "OPENROUTER_API_KEY",
+                        "req_template_json_object": {
+                            "model": raw_model,
+                            "messages": [{"role": "user", "content": "$INPUT"}],
+                            "stream": False,
+                        },
+                        "response_json": True,
+                        "response_json_field": "$.choices[0].message.content",
+                        "request_timeout": 60,
+                    }
+                }
             },
         },
         "reporting": {
@@ -148,7 +170,7 @@ def run_garak(config: dict, api_key: str, timeout: int = GARAK_TIMEOUT_SECONDS) 
         result = subprocess.run(
             ["garak", "--config", config_path],
             env=env,
-            check=True,
+            check=False,  # exit 1 = vulnerabilities found — normal garak behavior
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -157,14 +179,16 @@ def run_garak(config: dict, api_key: str, timeout: int = GARAK_TIMEOUT_SECONDS) 
             logger.info("garak stdout:\n%s", result.stdout[-2000:])
         if result.stderr:
             logger.info("garak stderr:\n%s", result.stderr[-2000:])
-    except subprocess.CalledProcessError as exc:
-        logger.error(
-            "garak exited with code %d.\nstdout: %s\nstderr: %s",
-            exc.returncode,
-            exc.stdout,
-            exc.stderr,
-        )
-        raise
+        if result.returncode not in (0, 1):
+            logger.error(
+                "garak exited with unexpected code %d.\nstdout: %s\nstderr: %s",
+                result.returncode,
+                result.stdout,
+                result.stderr,
+            )
+            raise subprocess.CalledProcessError(
+                result.returncode, result.args, result.stdout, result.stderr
+            )
     except subprocess.TimeoutExpired as exc:
         logger.error(
             "garak timed out after %d seconds for config %s",
@@ -175,7 +199,7 @@ def run_garak(config: dict, api_key: str, timeout: int = GARAK_TIMEOUT_SECONDS) 
     finally:
         os.unlink(config_path)
 
-    output_files = list(Path(output_dir).rglob("*.jsonl"))
+    output_files = list(Path(output_dir).rglob("*.report.jsonl"))
     if not output_files:
         raise FileNotFoundError(
             f"No JSONL output file found in {output_dir} after garak run"

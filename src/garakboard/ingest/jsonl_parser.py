@@ -4,6 +4,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
+from typing import TextIO
 
 from sqlalchemy.orm import Session
 
@@ -21,13 +22,15 @@ class IngestResult:
     skipped_count: int
 
 
-def _extract_prompt_text(prompt) -> str:
+def _extract_prompt_text(prompt) -> str | None:
     """
     Extract plain text from a garak prompt.
 
     Handles both the legacy format (plain string) and the garak >=0.14
     Conversation format (dict with a 'turns' list).
     """
+    if prompt is None:
+        return None
     if isinstance(prompt, str):
         return prompt
     if isinstance(prompt, dict):
@@ -37,7 +40,7 @@ def _extract_prompt_text(prompt) -> str:
             if isinstance(content, dict):
                 return content.get("text", "")
             return str(content)
-    return str(prompt) if prompt is not None else ""
+    return str(prompt)
 
 
 def _extract_response_text(outputs) -> str | None:
@@ -132,38 +135,19 @@ def parse_attempt_entry(entry: dict, run_id: str) -> Attempt:
     )
 
 
-def ingest_jsonl_file(file_path: str, run_id: str, session: Session) -> IngestResult:
+def ingest_jsonl_file(source: str | TextIO, run_id: str, session: Session) -> IngestResult:
     """
-    Parse an entire garak JSONL output file and insert all rows into the DB.
+    Parse a garak JSONL output file and insert all rows into the DB.
 
-    Reads the file line by line. For each line:
-    - If entry_type='eval': create a ProbeResult and add to session
-    - If entry_type='attempt': create an Attempt and add to session
-    - Otherwise: skip and increment skipped_count
-
-    Malformed JSON and parse errors are logged and counted as skipped; they do
-    not abort ingestion of the remaining lines.
-
-    Flushes (but does not commit) after processing all lines. The caller is
-    responsible for committing the transaction.
-
-    Args:
-        file_path: Path to the garak JSONL output file
-        run_id: The UUID string of the DB run this file belongs to
-        session: An active SQLAlchemy session
-
-    Returns:
-        IngestResult dataclass with probe_results_count, attempts_count,
-        and skipped_count.
-
-    Raises:
-        FileNotFoundError: If file_path does not exist
+    source may be a file path string or any file-like text object (e.g. io.StringIO),
+    allowing callers that already have the content in memory to avoid a second disk read.
     """
     probe_results_count = 0
     attempts_count = 0
     skipped_count = 0
 
-    with open(file_path, "r") as f:
+    f: TextIO = open(source, "r", encoding="utf-8", errors="replace") if isinstance(source, str) else source
+    try:
         for lineno, raw_line in enumerate(f, start=1):
             line = raw_line.strip()
             if not line:
@@ -172,7 +156,7 @@ def ingest_jsonl_file(file_path: str, run_id: str, session: Session) -> IngestRe
             try:
                 entry = json.loads(line)
             except json.JSONDecodeError as exc:
-                logger.warning("Skipping line %d of %s: invalid JSON (%s)", lineno, file_path, exc)
+                logger.warning("Skipping line %d of %s: invalid JSON (%s)", lineno, source, exc)
                 skipped_count += 1
                 continue
 
@@ -191,9 +175,12 @@ def ingest_jsonl_file(file_path: str, run_id: str, session: Session) -> IngestRe
                     skipped_count += 1
             except (ValueError, KeyError) as exc:
                 logger.warning(
-                    "Skipping line %d of %s: parse error (%s)", lineno, file_path, exc
+                    "Skipping line %d of %s: parse error (%s)", lineno, source, exc
                 )
                 skipped_count += 1
+    finally:
+        if isinstance(source, str):
+            f.close()
 
     session.flush()
 

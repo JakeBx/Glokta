@@ -34,15 +34,17 @@ def test_build_garak_config_returns_dict():
 
 
 def test_build_garak_config_sets_model_name():
-    """model_name appears in config under plugins.target_name (LiteLLM generator)."""
-    from garakboard.worker.garak_runner import build_garak_config
+    """model_name (without openrouter/ prefix) appears in the REST req_template."""
+    from garakboard.worker.garak_runner import build_garak_config, _GENERATOR_NAME
 
     config = build_garak_config(
         model_name="openrouter/meta-llama/llama-3-8b-instruct:free",
         probe_categories=["encoding"],
         output_dir="/tmp/output",
     )
-    assert config["plugins"]["target_name"] == "openrouter/meta-llama/llama-3-8b-instruct:free"
+    assert config["plugins"]["target_name"] == _GENERATOR_NAME
+    rest_gen = config["plugins"]["generators"]["rest"]["RestGenerator"]
+    assert rest_gen["req_template_json_object"]["model"] == "meta-llama/llama-3-8b-instruct:free"
 
 
 def test_build_garak_config_sets_probe_categories():
@@ -57,8 +59,8 @@ def test_build_garak_config_sets_probe_categories():
     assert config["plugins"]["probe_spec"] == "encoding,malwaregen"
 
 
-def test_build_garak_config_uses_litellm_generator():
-    """Config routes through LiteLLM generator (target_type=litellm)."""
+def test_build_garak_config_uses_rest_generator():
+    """Config routes through REST generator (target_type=rest)."""
     from garakboard.worker.garak_runner import build_garak_config
 
     config = build_garak_config(
@@ -66,7 +68,7 @@ def test_build_garak_config_uses_litellm_generator():
         probe_categories=["encoding"],
         output_dir="/tmp/output",
     )
-    assert config["plugins"]["target_type"] == "litellm"
+    assert config["plugins"]["target_type"] == "rest"
 
 
 def test_build_garak_config_sets_rpm_limit():
@@ -94,30 +96,43 @@ def test_build_garak_config_omits_rpm_limit_when_none():
     assert "generators_options" not in config.get("system", {})
 
 
-def test_build_garak_config_suppresses_stop_tokens():
-    """garak default stop=['#', ';'] truncates refusals and markdown responses
-    to empty content. Suppress it globally in the LiteLLM generator config."""
-    from garakboard.worker.garak_runner import build_garak_config
+def test_build_garak_config_sets_rest_uri():
+    """REST generator URI points at OpenRouter chat completions endpoint."""
+    from garakboard.worker.garak_runner import build_garak_config, _OPENROUTER_URI
 
     config = build_garak_config(
         model_name="openrouter/meta-llama/llama-3-8b-instruct:free",
         probe_categories=["encoding"],
         output_dir="/tmp/output",
     )
-    assert config["plugins"]["generators"]["litellm"]["suppressed_params"] == ["stop"]
+    rest_gen = config["plugins"]["generators"]["rest"]["RestGenerator"]
+    assert rest_gen["uri"] == _OPENROUTER_URI
 
 
-def test_build_garak_config_raises_max_tokens():
-    """garak default max_tokens=150 starves reasoning models that emit tokens
-    into reasoning_content first. Require ≥2048 for usable output."""
+def test_build_garak_config_strips_openrouter_prefix_from_model():
+    """'openrouter/' prefix is stripped before embedding model in REST template."""
     from garakboard.worker.garak_runner import build_garak_config
 
     config = build_garak_config(
-        model_name="openrouter/meta-llama/llama-3-8b-instruct:free",
+        model_name="openrouter/mistralai/mistral-nemo",
         probe_categories=["encoding"],
         output_dir="/tmp/output",
     )
-    assert config["plugins"]["generators"]["litellm"]["max_tokens"] >= 2048
+    rest_gen = config["plugins"]["generators"]["rest"]["RestGenerator"]
+    assert rest_gen["req_template_json_object"]["model"] == "mistralai/mistral-nemo"
+
+
+def test_build_garak_config_model_without_prefix_unchanged():
+    """Model name without 'openrouter/' prefix is passed through unchanged."""
+    from garakboard.worker.garak_runner import build_garak_config
+
+    config = build_garak_config(
+        model_name="mistralai/mistral-nemo",
+        probe_categories=["encoding"],
+        output_dir="/tmp/output",
+    )
+    rest_gen = config["plugins"]["generators"]["rest"]["RestGenerator"]
+    assert rest_gen["req_template_json_object"]["model"] == "mistralai/mistral-nemo"
 
 
 def test_build_garak_config_sets_parallel_attempts():
@@ -156,6 +171,18 @@ def test_default_probe_categories_covers_multiple_dimensions():
     assert len(DEFAULT_PROBE_CATEGORIES) >= 5
 
 
+def test_compute_remaining_probes_excludes_full_probes():
+    """Probes whose class name ends with 'Full' are excluded from the probe spec
+    because they run all prompts without respecting soft_probe_prompt_cap."""
+    from garakboard.worker.garak_runner import compute_remaining_probes
+
+    remaining = compute_remaining_probes(set(), ["continuation", "dan", "leakreplay"])
+    for probe in remaining:
+        class_name = probe.split(".")[-1] if "." in probe else probe
+        assert not class_name.endswith("Full"), f"Full probe not excluded: {probe}"
+    assert len(remaining) > 0, "expected at least some non-Full probes"
+
+
 def test_build_garak_config_sets_output_dir():
     """output_dir appears in config under reporting.report_dir."""
     from garakboard.worker.garak_runner import build_garak_config
@@ -166,6 +193,71 @@ def test_build_garak_config_sets_output_dir():
         output_dir="/tmp/garak_output",
     )
     assert config["reporting"]["report_dir"] == "/tmp/garak_output"
+
+
+# --- run_garak exit code tests ---
+
+
+def test_run_garak_accepts_exit_code_0():
+    """run_garak succeeds when garak exits 0 (no vulnerabilities found)."""
+    import subprocess
+    from garakboard.worker.garak_runner import run_garak
+
+    config = {"reporting": {"report_dir": "/tmp/fake_dir"}}
+    fake_result = MagicMock(returncode=0, stdout="ok", stderr="")
+    fake_jsonl = tempfile.NamedTemporaryFile(suffix=".report.jsonl", dir="/tmp", delete=False)
+    fake_jsonl.close()
+
+    with patch("garakboard.worker.garak_runner.subprocess.run", return_value=fake_result), \
+         patch("garakboard.worker.garak_runner.Path") as mock_path, \
+         patch("garakboard.worker.garak_runner.os.unlink"), \
+         patch("garakboard.worker.garak_runner.tempfile.NamedTemporaryFile") as mock_tmp:
+        mock_tmp.return_value.__enter__ = MagicMock(return_value=MagicMock(name="/tmp/config.yaml"))
+        mock_tmp.return_value.__exit__ = MagicMock(return_value=False)
+        mock_tmp.return_value.name = "/tmp/config.yaml"
+        mock_path.return_value.rglob.return_value = [MagicMock(stat=lambda: MagicMock(st_mtime=1), __str__=lambda self: fake_jsonl.name)]
+        run_garak(config, api_key="test-key")  # should not raise
+
+
+def test_run_garak_accepts_exit_code_1():
+    """run_garak succeeds when garak exits 1 (vulnerabilities detected — normal)."""
+    from garakboard.worker.garak_runner import run_garak
+
+    config = {"reporting": {"report_dir": "/tmp/fake_dir"}}
+    fake_result = MagicMock(returncode=1, stdout="FAIL attack_success_rate=0.4", stderr="")
+    fake_jsonl = tempfile.NamedTemporaryFile(suffix=".report.jsonl", dir="/tmp", delete=False)
+    fake_jsonl.close()
+
+    with patch("garakboard.worker.garak_runner.subprocess.run", return_value=fake_result), \
+         patch("garakboard.worker.garak_runner.Path") as mock_path, \
+         patch("garakboard.worker.garak_runner.os.unlink"), \
+         patch("garakboard.worker.garak_runner.tempfile.NamedTemporaryFile") as mock_tmp:
+        mock_tmp.return_value.__enter__ = MagicMock(return_value=MagicMock(name="/tmp/config.yaml"))
+        mock_tmp.return_value.__exit__ = MagicMock(return_value=False)
+        mock_tmp.return_value.name = "/tmp/config.yaml"
+        mock_path.return_value.rglob.return_value = [MagicMock(stat=lambda: MagicMock(st_mtime=1), __str__=lambda self: fake_jsonl.name)]
+        run_garak(config, api_key="test-key")  # should not raise
+
+
+def test_run_garak_raises_on_unexpected_exit_code():
+    """run_garak raises CalledProcessError for exit codes other than 0 or 1."""
+    import subprocess
+    from garakboard.worker.garak_runner import run_garak
+
+    config = {"reporting": {"report_dir": "/tmp/fake_dir"}}
+    fake_result = MagicMock(returncode=2, stdout="", stderr="fatal error", args=["garak"])
+
+    with patch("garakboard.worker.garak_runner.subprocess.run", return_value=fake_result), \
+         patch("garakboard.worker.garak_runner.os.unlink"), \
+         patch("garakboard.worker.garak_runner.tempfile.NamedTemporaryFile") as mock_tmp:
+        mock_tmp.return_value.__enter__ = MagicMock(return_value=MagicMock(name="/tmp/config.yaml"))
+        mock_tmp.return_value.__exit__ = MagicMock(return_value=False)
+        mock_tmp.return_value.name = "/tmp/config.yaml"
+        try:
+            run_garak(config, api_key="test-key")
+            assert False, "should have raised CalledProcessError"
+        except subprocess.CalledProcessError as exc:
+            assert exc.returncode == 2
 
 
 # --- publish_run_job tests ---
@@ -432,7 +524,7 @@ def test_run_scan_sets_started_at(db_session):
         mock_ingest.return_value = MagicMock(probe_results_count=0, attempts_count=0)
 
         from garakboard.worker.tasks import run_scan
-        run_scan.apply(args=[run_id, "openrouter/test/model", ["encoding"]])
+        run_scan.apply(args=[run_id, "openrouter/test/model", ["encoding"]], throw=False)
 
     db_session.expire_all()
     run = db_session.query(Run).filter(Run.id == run_id).first()
@@ -499,7 +591,7 @@ def test_run_scan_sets_completed_at_on_failure(db_session):
         mock_ingest.return_value = MagicMock(probe_results_count=0, attempts_count=0)
 
         from garakboard.worker.tasks import run_scan
-        run_scan.apply(args=[run_id, "openrouter/test/model", ["encoding"]])
+        run_scan.apply(args=[run_id, "openrouter/test/model", ["encoding"]], throw=False)
 
     db_session.expire_all()
     run = db_session.query(Run).filter(Run.id == run_id).first()
@@ -624,8 +716,8 @@ def test_run_scan_clears_completed_at_on_429_retry(db_session):
 
 def test_run_scan_marks_failed_when_ingest_returns_zero_results(db_session):
     """If garak exits 0 but the JSONL contains no eval/attempt entries, the run
-    must be marked 'failed' — not 'complete'. Garak's generator can silently
-    swallow per-probe errors and exit 0 with an empty output file."""
+    must be marked 'failed' and the task must raise EmptyIngestError so Celery
+    records it as FAILED (not a silent successful task returning an error dict)."""
     from garakboard.models import Run, Model
 
     model = Model(
@@ -649,8 +741,9 @@ def test_run_scan_marks_failed_when_ingest_returns_zero_results(db_session):
         mock_ingest.return_value = MagicMock(probe_results_count=0, attempts_count=0)
 
         from garakboard.worker.tasks import run_scan
-        run_scan.apply(args=[run_id, "openrouter/test/model", ["encoding"]])
+        result = run_scan.apply(args=[run_id, "openrouter/test/model", ["encoding"]], throw=False)
 
+    assert result.failed(), "task should be marked FAILED when ingest yields zero results"
     db_session.expire_all()
     run = db_session.query(Run).filter(Run.id == run_id).first()
     assert run.status == "failed"

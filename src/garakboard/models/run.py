@@ -43,11 +43,13 @@ class Run(Base):
         default=lambda: datetime.now(timezone.utc),
     )
 
-    # Community run reproducibility metadata
+    # Run metadata — populated for all run types by the worker
     garak_version: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    garak_config: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Community run reproducibility metadata
     scanned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     submitted_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    garak_config: Mapped[str | None] = mapped_column(Text, nullable=True)
     config_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     jsonl_manifest_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     verification_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

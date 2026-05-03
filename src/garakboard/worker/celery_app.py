@@ -4,7 +4,20 @@ import os
 
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import worker_process_init
 from garakboard.config import settings
+
+@worker_process_init.connect
+def reset_db_connections(**_):
+    """Dispose inherited connection pool after Celery forks a worker process.
+
+    Without this, forked workers share the parent's open psycopg2 sockets.
+    PostgreSQL closes those sockets from its side, producing
+    'server closed the connection unexpectedly' on the first query.
+    """
+    from garakboard.database import engine
+    engine.dispose()
+
 
 celery_app = Celery(
     "garakboard",

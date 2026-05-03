@@ -22,11 +22,13 @@ class RunResponse(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     created_at: datetime
-    # Reproducibility / community metadata
+    # Run metadata
     garak_version: str | None = None
+    garak_config: str | None = None
+    raw_output: str | None = None
+    # Community metadata
     scanned_at: datetime | None = None
     submitted_by: str | None = None
-    garak_config: str | None = None
     config_hash: str | None = None
     jsonl_manifest_hash: str | None = None
     verification_requested_at: datetime | None = None

@@ -38,15 +38,8 @@ def _is_duplicate_object(exc: sa_exc.ProgrammingError) -> bool:
     return pgcode in ("42710", "42P07")
 
 
-def init_db() -> None:
-    """Create all tables and enum types, updating the schema if they don't yet exist.
-
-    Safe to run against:
-    - A brand-new empty database      → creates everything from scratch.
-    - A fully-initialised database    → all create_all() calls are no-ops.
-    - A partially-initialised database → creates missing pieces; silently
-      ignores 'duplicate object' errors from PostgreSQL when enum types
-      or tables were partially created in a previous attempt.
+def _create_tables() -> None:
+    """Create all tables and enum types with retry logic.
 
     Retries up to 5 times with exponential backoff (1s, 2s, 4s, 8s, 16s)
     so the API can survive brief postgres unavailability during container
@@ -101,6 +94,23 @@ def init_db() -> None:
                 wait,
             )
             time.sleep(wait)
+
+
+def init_db() -> None:
+    """Create all tables and apply any missing column migrations.
+
+    Safe to run against:
+    - A brand-new empty database      → creates everything from scratch.
+    - A fully-initialised database    → all create_all() calls are no-ops.
+    - A partially-initialised database → creates missing pieces; silently
+      ignores 'duplicate object' errors from PostgreSQL when enum types
+      or tables were partially created in a previous attempt.
+
+    Always calls migrate_db() afterwards to add any columns introduced after
+    the table was first created.
+    """
+    _create_tables()
+    migrate_db()
 
 
 def migrate_db() -> None:

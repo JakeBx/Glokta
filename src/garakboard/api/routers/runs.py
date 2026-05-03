@@ -12,8 +12,8 @@ from sqlalchemy.orm import Session
 
 from garakboard.api.deps import get_db
 from garakboard.ingest.jsonl_parser import ingest_jsonl_file
-from garakboard.models import Model, Run
-from garakboard.schemas import RunCreate, RunResponse, RunSummaryRow
+from garakboard.models import Attempt, Model, Run, ProbeResult
+from garakboard.schemas import AttemptResponse, RunCreate, RunResponse, RunSummaryRow, ProbeResultResponse
 from garakboard.worker.tasks import publish_run_job
 
 router = APIRouter()
@@ -176,6 +176,38 @@ def get_runs_summary(db: Session = Depends(get_db)) -> list[RunSummaryRow]:
         )
         for r in rows
     ]
+
+
+@router.get("/runs/{run_id}/attempts", response_model=list[AttemptResponse])
+def get_run_attempts(
+    run_id: UUID,
+    probe_name: str | None = None,
+    db: Session = Depends(get_db),
+) -> list[AttemptResponse]:
+    """Return attempts for a run, optionally filtered by probe_name."""
+    run = db.query(Run).filter(Run.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    query = db.query(Attempt).filter(Attempt.run_id == run_id)
+    if probe_name:
+        query = query.filter(Attempt.probe_name == probe_name)
+    results = query.order_by(Attempt.probe_name, Attempt.id).all()
+    return [AttemptResponse.model_validate(a) for a in results]
+
+
+@router.get("/runs/{run_id}/probe-results", response_model=list[ProbeResultResponse])
+def get_run_probe_results(run_id: UUID, db: Session = Depends(get_db)) -> list[ProbeResultResponse]:
+    """Return all probe results for a specific run, ordered by probe name."""
+    run = db.query(Run).filter(Run.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    results = (
+        db.query(ProbeResult)
+        .filter(ProbeResult.run_id == run_id)
+        .order_by(ProbeResult.probe_name, ProbeResult.detector)
+        .all()
+    )
+    return [ProbeResultResponse.model_validate(r) for r in results]
 
 
 @router.get("/runs/{run_id}", response_model=RunResponse)

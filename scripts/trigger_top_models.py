@@ -56,8 +56,12 @@ def _upsert_model(session, model_name: str) -> Model:
     return model
 
 
-def trigger_scans(top_n: int, max_cost_usd: float, dry_run: bool) -> int:
-    """Fetch top models under the cap, create Run records, and dispatch to Celery."""
+def trigger_scans(top_n: int, max_cost_usd: float, dry_run: bool, overwrite: bool = False) -> int:
+    """Fetch top models under the cap, create Run records, and dispatch to Celery.
+
+    Models that already have a pending, running, or complete run are skipped unless
+    ``overwrite=True`` is passed explicitly.
+    """
     models = fetch_top_models(
         api_key=settings.openrouter_api_key,
         top_n=top_n,
@@ -89,10 +93,25 @@ def trigger_scans(top_n: int, max_cost_usd: float, dry_run: bool) -> int:
     init_db()
     session = SessionLocal()
     queued = 0
+    skipped = 0
     try:
         for m in models:
             model_name = _openrouter_name(m["id"])
             model = _upsert_model(session, model_name)
+
+            if not overwrite:
+                existing = (
+                    session.query(Run)
+                    .filter(
+                        Run.model_id == model.id,
+                        Run.status.in_(("pending", "running", "complete")),
+                    )
+                    .first()
+                )
+                if existing is not None:
+                    print(f"  ↷ Skipping {model_name} — {existing.status} run {existing.id} already exists")
+                    skipped += 1
+                    continue
 
             run = Run(
                 model_id=model.id,
@@ -100,7 +119,7 @@ def trigger_scans(top_n: int, max_cost_usd: float, dry_run: bool) -> int:
                 status="pending",
             )
             session.add(run)
-            session.flush()
+            session.commit()  # commit before publishing so the worker can find the run
 
             try:
                 publish_run_job(str(run.id), model_name, DEFAULT_PROBE_CATEGORIES)
@@ -112,12 +131,12 @@ def trigger_scans(top_n: int, max_cost_usd: float, dry_run: bool) -> int:
 
             queued += 1
             print(f"  ✓ Queued run {run.id} for {model_name}")
-
-        session.commit()
     finally:
         session.close()
 
-    print(f"\nQueued {queued}/{len(models)} runs.")
+    print(f"\nQueued {queued}/{len(models)} runs ({skipped} skipped — already active/complete).")
+    if skipped:
+        print("Use --overwrite to re-queue models with existing runs.")
     print("Workers respect per-model Redis locks, so runs serialize per model.")
     return queued
 
@@ -127,10 +146,11 @@ def main():
     parser.add_argument("--top-n", type=int, default=20, help="Number of models to select (default: 20)")
     parser.add_argument("--max-cost", type=float, default=5.0, help="Per-model USD cost cap (default: 5.00)")
     parser.add_argument("--dry-run", action="store_true", help="Show selection without queueing runs")
+    parser.add_argument("--overwrite", action="store_true", help="Re-queue models that already have active/complete runs")
     args = parser.parse_args()
 
     try:
-        count = trigger_scans(args.top_n, args.max_cost, args.dry_run)
+        count = trigger_scans(args.top_n, args.max_cost, args.dry_run, args.overwrite)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)

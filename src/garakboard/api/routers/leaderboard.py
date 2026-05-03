@@ -185,6 +185,7 @@ def get_model_detail(model_id: UUID, db: Session = Depends(get_db)) -> ModelDeta
         model_id=model.id,
         model_name=model.name,
         provider=model.provider,
+        run_id=run.id if run else None,
         probe_results=probe_result_details,
         summary=summary,
     )
