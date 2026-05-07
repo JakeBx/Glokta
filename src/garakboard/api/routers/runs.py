@@ -14,7 +14,6 @@ from garakboard.api.deps import get_db
 from garakboard.ingest.jsonl_parser import ingest_jsonl_file
 from garakboard.models import Attempt, Model, Run, ProbeResult
 from garakboard.schemas import AttemptResponse, RunCreate, RunResponse, RunSummaryRow, ProbeResultResponse
-from garakboard.worker.tasks import publish_run_job
 
 router = APIRouter()
 
@@ -56,7 +55,7 @@ def _build_run_response(run: Run, db: Session) -> RunResponse:
 
 @router.post("/runs", response_model=RunResponse, status_code=201)
 def create_run(run_data: RunCreate, db: Session = Depends(get_db)) -> RunResponse:
-    """Create a run record with status='pending', triggered_by='api'; publish job to Redis queue."""
+    """Create a run record with status='pending'. The pipeline picks it up on next poll."""
     model = db.query(Model).filter(Model.id == run_data.model_id).first()
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
@@ -69,8 +68,6 @@ def create_run(run_data: RunCreate, db: Session = Depends(get_db)) -> RunRespons
     db.add(run)
     db.commit()
     db.refresh(run)
-
-    publish_run_job(str(run.id), model.name, run_data.probe_categories)
 
     return RunResponse.model_validate(run)
 
@@ -247,14 +244,6 @@ def trigger_verified_scan(run_id: UUID, db: Session = Depends(get_db)) -> RunRes
     if community_run.verification_requested_at is None:
         raise HTTPException(status_code=400, detail="Verification has not been requested for this run")
 
-    from garakboard.models import ProbeResult
-    probe_categories = list({
-        r.probe_category
-        for r in db.query(ProbeResult).filter(ProbeResult.run_id == run_id).all()
-    })
-
-    model = db.query(Model).filter(Model.id == community_run.model_id).first()
-
     verified_run = Run(
         model_id=community_run.model_id,
         triggered_by="verified",
@@ -264,7 +253,5 @@ def trigger_verified_scan(run_id: UUID, db: Session = Depends(get_db)) -> RunRes
     db.add(verified_run)
     db.commit()
     db.refresh(verified_run)
-
-    publish_run_job(str(verified_run.id), model.name, probe_categories)
 
     return RunResponse.model_validate(verified_run)

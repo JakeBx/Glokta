@@ -11,6 +11,9 @@ Usage (Docker):
 The script is idempotent: models that already exist (by name) are skipped, and probe
 run queue entries that are already pending or running are skipped. Each seeded model
 receives one ProbeRunQueue entry per probe category, covering 5 security dimensions.
+
+Runs are created with status='pending'. The Prefect pipeline (scan-pending-runs flow,
+~2 min interval) picks them up automatically — no manual dispatch step is needed.
 """
 
 import sys
@@ -22,7 +25,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from garakboard.database import SessionLocal, init_db
 from garakboard.models import Model, ProbeRunQueue, Run
-from garakboard.worker.tasks import publish_run_job
 
 # Current OpenRouter free-tier model catalogue (verified April 2026)
 # Format: (name, provider, version)
@@ -127,17 +129,16 @@ def seed_probe_queue(session) -> tuple[int, int]:
     return inserted, skipped
 
 
-def dispatch_pending_queue(session) -> int:
+def queue_pending_runs(session) -> int:
     """
-    Read pending ProbeRunQueue entries for TEST_MODELS, create one Run per
-    (model, probe_category) pair, and dispatch each to Celery via publish_run_job().
+    Read pending ProbeRunQueue entries for TEST_MODELS and create one pending Run per
+    (model, probe_category) pair.
 
-    The per-model Redis lock in the worker serializes concurrent runs for the
-    same model — all runs are dispatched immediately and the lock ensures only
-    one executes per model at a time.
+    The Prefect pipeline (scan-pending-runs flow, ~2 min poll interval) picks up the
+    pending runs automatically.
 
     Returns:
-        dispatched_count
+        queued_count
     """
     model_names = [name for name, _, _ in TEST_MODELS]
     models = (
@@ -156,7 +157,7 @@ def dispatch_pending_queue(session) -> int:
         .all()
     )
 
-    dispatched = 0
+    queued = 0
 
     for entry in pending_entries:
         model = model_by_id[entry.model_id]
@@ -168,28 +169,19 @@ def dispatch_pending_queue(session) -> int:
         )
         session.add(run)
         entry.status = "running"
-        session.commit()  # commit before dispatch so the worker can find the run
+        session.commit()
 
-        try:
-            publish_run_job(str(run.id), model.name, [entry.probe_category])
-        except Exception as e:
-            print(f"  ⚠ Failed to dispatch {model.name}/{entry.probe_category}: {e}")
-            run.status = "failed"
-            entry.status = "pending"
-            session.commit()
-            continue
+        queued += 1
+        print(f"  ✓ Queued run for {model.name} — {entry.probe_category}")
 
-        dispatched += 1
-        print(f"  ✓ Dispatched {model.name} — {entry.probe_category}")
-
-    return dispatched
+    return queued
 
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Seed GarakBoard models and probe queue")
-    parser.add_argument("--dispatch", action="store_true",
-                        help="Also dispatch pending queue entries to Celery workers")
+    parser.add_argument("--queue", action="store_true",
+                        help="Also create pending Run records for queued probe entries (pipeline picks them up automatically)")
     args = parser.parse_args()
 
     print("GarakBoard — Seeding OpenRouter free-tier models...")
@@ -213,19 +205,21 @@ def main():
             f" = {total} combinations"
         )
 
-        if args.dispatch:
+        if args.queue:
             print()
-            print("Dispatching pending probe runs to Celery workers...")
-            dispatched = dispatch_pending_queue(session)
-            print(f"✓ Dispatched: {dispatched} runs")
-            if dispatched == 0:
-                print("  (Nothing pending — all queue entries already dispatched)")
+            print("Creating pending Run records for probe queue entries...")
+            run_count = queue_pending_runs(session)
+            print(f"✓ Queued: {run_count} runs")
+            if run_count == 0:
+                print("  (Nothing pending — all queue entries already have runs)")
+            else:
+                print("  The Prefect pipeline will pick them up on the next 2-minute poll cycle.")
         else:
             pending = session.query(ProbeRunQueue).filter(
                 ProbeRunQueue.status == "pending"
             ).count()
             if pending > 0:
-                print(f"\n💡 {pending} probe runs are pending. Use --dispatch to send them to Celery workers.")
+                print(f"\n💡 {pending} probe runs are pending. Use --queue to create Run records for the Prefect pipeline.")
     finally:
         session.close()
 

@@ -1,0 +1,33 @@
+FROM python:3.11-slim
+
+# Install uv (much faster than pip)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /app
+
+# System deps — Rust/Cargo required to compile base2048 (garak transitive dep)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       -o Acquire::Retries=5 \
+       gcc libpq-dev git rustc cargo curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Dependency layer (cached until pyproject.toml changes) ───────────
+COPY pyproject.toml ./
+RUN mkdir -p src/garakboard && touch src/garakboard/__init__.py
+RUN uv pip install --system --no-cache ".[pipeline,dev]"
+
+# Pre-warm garak's plugin cache to avoid race conditions during subprocess launches
+RUN python -c "from garak._plugins import PluginCache; PluginCache.instance()" || true
+
+# ── Application layer ────────────────────────────────────────────────
+COPY src/ ./src/
+COPY prefect.yaml ./
+COPY docker/start-pipeline.sh ./docker/start-pipeline.sh
+RUN uv pip install --system --no-deps --no-cache --reinstall-package garakboard .
+
+RUN chmod +x /app/docker/start-pipeline.sh
+
+ENV PYTHONUNBUFFERED=1
+
+CMD ["/app/docker/start-pipeline.sh"]

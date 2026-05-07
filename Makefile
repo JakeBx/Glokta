@@ -1,17 +1,21 @@
-.PHONY: infra services api frontend seed test
+.PHONY: infra services pipeline api frontend seed test
 
-CONDA_ENV = open-llm-sec
-COMPOSE = docker compose -f docker/docker-compose.yml
-INFRA = docker compose -f docker/docker-compose.infra.yml
+CONDA_ENV = garakboard
+COMPOSE    = docker compose --env-file docker/.env -f docker/docker-compose.yml
+INFRA      = docker compose --env-file docker/.env -f docker/docker-compose.infra.yml
 
-# Start infrastructure only (postgres + redis)
+# Start postgres only (local dev)
 infra:
 	$(INFRA) up -d
 
-# Start infrastructure + worker + beat + flower
+# Start full stack (postgres + prefect-server + prefect-worker + api + frontend)
 services:
-	$(INFRA) up -d
-	$(COMPOSE) up -d worker beat flower
+	$(COMPOSE) up -d
+
+# Run pipeline worker locally against infra (infra must be running)
+pipeline:
+	PYTHONPATH=src conda run -n $(CONDA_ENV) \
+	  python -m garakboard.pipeline.serve
 
 # Run API locally with hot-reload (infra must be running)
 api:

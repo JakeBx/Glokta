@@ -1,0 +1,28 @@
+name: garakboard
+prefect-version: "3.7.0"
+
+build: null
+push: null
+
+pull:
+  - prefect.deployments.steps.set_working_directory:
+      directory: /app
+
+deployments:
+  - name: scan-pending-runs
+    entrypoint: src/garakboard/pipeline/flows.py:scan_pending_runs
+    schedules:
+      - interval: 120
+        timezone: UTC
+    work_pool:
+      name: garakboard-process-pool
+      job_variables: {}
+
+  - name: discover-and-queue-scans
+    entrypoint: src/garakboard/pipeline/flows.py:discover_and_queue_scans
+    schedules:
+      - cron: "0 2 * * 1"
+        timezone: UTC
+    work_pool:
+      name: garakboard-process-pool
+      job_variables: {}

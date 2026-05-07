@@ -11,6 +11,9 @@ Usage (Docker):
 Defaults to the top 20 models below a $5/scan cap. Override via flags:
     --top-n 10 --max-cost 2.50
     --dry-run                  # show selection only
+
+Runs are created with status='pending'. The Prefect pipeline picks them up on its
+next 2-minute poll cycle (scan-pending-runs flow).
 """
 
 import argparse
@@ -26,7 +29,6 @@ from garakboard.database import SessionLocal, init_db
 from garakboard.models import Model, Run
 from garakboard.worker.garak_runner import DEFAULT_PROBE_CATEGORIES
 from garakboard.worker.openrouter_client import estimate_scan_cost_usd, fetch_top_models
-from garakboard.worker.tasks import publish_run_job
 
 
 def _openrouter_name(model_id: str) -> str:
@@ -57,10 +59,11 @@ def _upsert_model(session, model_name: str) -> Model:
 
 
 def trigger_scans(top_n: int, max_cost_usd: float, dry_run: bool, overwrite: bool = False) -> int:
-    """Fetch top models under the cap, create Run records, and dispatch to Celery.
+    """Fetch top models under the cap and create pending Run records.
 
-    Models that already have a pending, running, or complete run are skipped unless
-    ``overwrite=True`` is passed explicitly.
+    The Prefect pipeline (scan-pending-runs flow, ~2 min interval) picks up the
+    pending runs automatically.  Models that already have a pending, running, or
+    complete run are skipped unless ``overwrite=True`` is passed explicitly.
     """
     models = fetch_top_models(
         api_key=settings.openrouter_api_key,
@@ -119,15 +122,7 @@ def trigger_scans(top_n: int, max_cost_usd: float, dry_run: bool, overwrite: boo
                 status="pending",
             )
             session.add(run)
-            session.commit()  # commit before publishing so the worker can find the run
-
-            try:
-                publish_run_job(str(run.id), model_name, DEFAULT_PROBE_CATEGORIES)
-            except Exception as exc:
-                print(f"  ⚠ Failed to dispatch {model_name}: {exc}")
-                run.status = "failed"
-                session.commit()
-                continue
+            session.commit()  # Prefect pipeline picks up pending runs on next poll
 
             queued += 1
             print(f"  ✓ Queued run {run.id} for {model_name}")
@@ -137,7 +132,7 @@ def trigger_scans(top_n: int, max_cost_usd: float, dry_run: bool, overwrite: boo
     print(f"\nQueued {queued}/{len(models)} runs ({skipped} skipped — already active/complete).")
     if skipped:
         print("Use --overwrite to re-queue models with existing runs.")
-    print("Workers respect per-model Redis locks, so runs serialize per model.")
+    print("The Prefect pipeline will pick up pending runs on its next 2-minute poll cycle.")
     return queued
 
 

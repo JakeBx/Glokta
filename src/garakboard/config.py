@@ -21,9 +21,6 @@ class Settings(BaseSettings):
     # Database — no default; must be set via DATABASE_URL env var / .env
     database_url: str = ""
 
-    # Redis — required; no default to prevent silent localhost mishaps
-    redis_url: str = "redis://localhost:6379/0"
-
     # OpenRouter
     openrouter_api_key: str = ""
     openrouter_rpm_limit: int = 60  # conservative free-tier default; override via env

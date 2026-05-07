@@ -1,23 +1,23 @@
 # GarakBoard — Open LLM Security Leaderboard
 
-GarakBoard is an automated vulnerability scanning platform that runs [garak](https://github.com/NVIDIA/garak) probes against LLM endpoints and surfaces comparative security results in a leaderboard dashboard. It coordinates async scan jobs via Celery + Redis, persists results in PostgreSQL, and presents everything through a Gradio UI and a REST API.
+GarakBoard is an automated vulnerability scanning platform that runs [garak](https://github.com/NVIDIA/garak) probes against LLM endpoints and surfaces comparative security results in a leaderboard dashboard. It orchestrates scan jobs via Prefect, persists results in PostgreSQL, and presents everything through a Gradio UI and a REST API.
 
 Built as a project to explore what a reproducible, self-hostable LLM security leaderboard looks like in practice. Scores are raw pass rates from named garak probes — no proprietary weighting, no index. Any result can be reproduced by running the same garak command against the same model.
 
 ## Features
 
-- **End-to-end garak ingest pipeline** — worker spawns garak as a subprocess, tails the JSONL output in real time, and streams results to PostgreSQL
+- **End-to-end garak ingest pipeline** — Prefect worker spawns garak as a subprocess, tails the JSONL output in real time, and streams results to PostgreSQL
 - **REST API with multi-axis filtering** — filter the leaderboard by probe category, model, and date; full Swagger UI at `/docs`
 - **Leaderboard UI** — filterable table with per-model drill-down showing probe-level breakdowns (Gradio, `localhost:7860`)
-- **Manual run triggering** — `POST /api/runs` with a model UUID and optional probe category list; status polling included
-- **Async job queue** — Celery + Redis with per-model token-bucket rate limiting and automatic 429 retry with exponential back-off
+- **Manual run triggering** — `POST /api/runs` with a model UUID; the Prefect pipeline picks it up on the next 2-minute poll
+- **Prefect orchestration** — automatic retries, Prefect Server UI at port 4200, SKIP LOCKED for safe concurrent workers
 - **Zero direct cost** — targets OpenRouter free-tier models exclusively; no spend required to run the full probe suite
-- **Docker Compose full-stack deployment** — one command starts API, worker, Celery Beat, Gradio frontend, PostgreSQL, and Redis
+- **Docker Compose full-stack deployment** — one command starts API, Prefect Server, Prefect worker, Gradio frontend, and PostgreSQL
 - **10 probe categories** — `encoding`, `dan`, `goodside`, `promptinject`, `malwaregen`, `continuation`, `lmrc`, `leakreplay`, `snowball`, `badchars`
 
 ## Prerequisites
 
-- **Docker Desktop** (or Docker Engine + Compose V2) — required to run backing services (PostgreSQL, Redis) and optionally the full stack
+- **Docker Desktop** (or Docker Engine + Compose V2) — required to run backing services (PostgreSQL) and optionally the full stack
 - **Conda** (Miniconda or Anaconda) — used to manage the Python development environment
 - **OpenRouter API key** — you need an account at [openrouter.ai](https://openrouter.ai) with at least **$10 in credits** to run scan jobs against free-tier models. Set the key as `OPENROUTER_API_KEY` in your `.env` file (see below)
 
@@ -39,7 +39,7 @@ cp .env.example .env
 # Edit .env and set OPENROUTER_API_KEY=<your key from openrouter.ai>
 ```
 
-### 3. Start backing services (PostgreSQL + Redis)
+### 3. Start backing services (PostgreSQL)
 
 ```bash
 # PostgreSQL 16
@@ -50,15 +50,14 @@ docker run -d \
   -e POSTGRES_PASSWORD=garakboard \
   -p 5432:5432 \
   postgres:16-alpine
-
-# Redis 7
-docker run -d \
-  --name garakboard-redis \
-  -p 6379:6379 \
-  redis:7-alpine
 ```
 
-Both containers must be running before you start the API or worker. You can verify with `docker ps`.
+Or use the infra Compose file (recommended):
+```bash
+make infra
+```
+
+The container must be running before you start the API or pipeline. You can verify with `docker ps`.
 
 ### 4. Seed the model catalogue
 
@@ -76,12 +75,15 @@ PYTHONPATH=src uvicorn garakboard.api.app:app --reload
 
 The API is available at **http://localhost:8000** with interactive docs at **http://localhost:8000/docs**.
 
-### 6. Start the Celery worker (new terminal)
+### 6. Start the Prefect pipeline worker (new terminal)
 
 ```bash
-conda activate garakboard
-PYTHONPATH=src celery -A garakboard.worker.celery_app:celery_app worker --loglevel=info
+make pipeline
+# or manually:
+PYTHONPATH=src conda run -n garakboard python -m garakboard.pipeline.serve
 ```
+
+The pipeline polls for pending runs every 2 minutes and discovers new models weekly.
 
 ### 7. Start the Gradio dashboard (new terminal)
 
@@ -100,7 +102,6 @@ Open **http://localhost:7860** to access the dashboard.
 | FastAPI | http://localhost:8000 |
 | Swagger UI | http://localhost:8000/docs |
 | PostgreSQL | localhost:5432 |
-| Redis | localhost:6379 |
 
 ## Running the Test Suite
 
@@ -146,8 +147,8 @@ docker compose -f docker/docker-compose.yml exec api python /app/scripts/seed_mo
 | Gradio Dashboard | http://localhost:7860 |
 | FastAPI | http://localhost:8000 |
 | Swagger UI | http://localhost:8000/docs |
+| Prefect Server UI | http://localhost:4200 |
 | pgAdmin | http://localhost:5050 |
-| Flower (Celery) | http://localhost:5555 |
 
 ### 5. Tear down
 
@@ -304,6 +305,7 @@ Import order respects FK dependencies: `models` → `runs` → `probe_results`.
 open-llm-sec/
 ├── scripts/
 │   ├── seed_models.py          # Idempotent model catalogue seeder
+│   ├── trigger_top_models.py   # Manually queue top OpenRouter models
 │   ├── export_to_hf.py         # Export DB → HuggingFace dataset
 │   └── import_from_hf.py       # Import HuggingFace dataset → DB (idempotent merge)
 ├── src/garakboard/
@@ -316,19 +318,22 @@ open-llm-sec/
 │   │   └── routers/            # health, models, runs, leaderboard
 │   ├── ingest/
 │   │   └── jsonl_parser.py     # garak JSONL → DB
+│   ├── pipeline/
+│   │   ├── flows.py            # Prefect flows + pure business logic
+│   │   └── serve.py            # Standalone serve entrypoint (no Prefect Server)
 │   ├── worker/
-│   │   ├── celery_app.py       # Celery app + Beat schedule
-│   │   ├── tasks.py            # run_scan + discover_and_schedule_scans
 │   │   ├── garak_runner.py     # Subprocess wrapper for garak CLI
-│   │   └── rate_limiter.py     # Redis token-bucket rate limiter
+│   │   └── openrouter_client.py # OpenRouter model catalogue + cost estimation
 │   └── frontend/
 │       └── gradio_app.py       # Gradio dashboard
 ├── docker/
 │   ├── Dockerfile.api
-│   ├── Dockerfile.worker
+│   ├── Dockerfile.pipeline     # Prefect worker image (includes garak + prefect)
+│   ├── start-pipeline.sh       # Pipeline startup: wait → deploy → worker start
 │   ├── docker-compose.yml
 │   └── .env.docker
-├── tests/                      # 151 tests (unit + integration)
+├── prefect.yaml                # Prefect deployment definitions
+├── tests/                      # unit + integration tests
 ├── environment.yml
 ├── pyproject.toml
 └── .env.example

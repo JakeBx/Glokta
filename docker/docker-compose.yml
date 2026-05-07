@@ -1,4 +1,4 @@
-# GarakBoard — Docker Compose stack
+# GarakBoard — Docker Compose stack (5 services, Prefect replaces Celery/Redis)
 # Usage: docker compose --env-file docker/.env -f docker/docker-compose.yml up
 # Copy docker/.env.docker to docker/.env and fill in your values before first run.
 
@@ -21,16 +21,41 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
+  prefect-server:
+    image: prefecthq/prefect:3-python3.11
     restart: unless-stopped
+    command: prefect server start --host 0.0.0.0
+    environment:
+      PREFECT_API_DATABASE_CONNECTION_URL: sqlite+aiosqlite:////prefect/prefect.db
     ports:
-      - "6379:6379"
+      - "4200:4200"
+    volumes:
+      - prefect_data:/prefect
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 20s
+
+  prefect-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.pipeline
+    container_name: garakboard-prefect-worker
+    restart: unless-stopped
+    environment:
+      PREFECT_API_URL: http://prefect-server:4200/api
+      DATABASE_URL: postgresql://garakboard:${POSTGRES_PASSWORD}@postgres:5432/garakboard
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY in docker/.env}
+      OPENROUTER_RPM_LIMIT: ${OPENROUTER_RPM_LIMIT:-60}
+      GARAK_PARALLEL_ATTEMPTS: ${GARAK_PARALLEL_ATTEMPTS:-10}
+      GARAK_SOFT_PROBE_PROMPT_CAP: ${GARAK_SOFT_PROBE_PROMPT_CAP:-50}
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
 
   api:
     build:
@@ -38,9 +63,7 @@ services:
       dockerfile: docker/Dockerfile.api
     restart: unless-stopped
     environment:
-      # Use Docker service names — not localhost — so containers can reach each other
       DATABASE_URL: postgresql://garakboard:${POSTGRES_PASSWORD}@postgres:5432/garakboard
-      REDIS_URL: redis://redis:6379/0
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY in docker/.env}
       API_HOST: "0.0.0.0"
       API_PORT: "8000"
@@ -50,49 +73,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 15s
-
-  worker:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.worker
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql://garakboard:${POSTGRES_PASSWORD}@postgres:5432/garakboard
-      REDIS_URL: redis://redis:6379/0
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY in docker/.env}
-      OPENROUTER_RPM_LIMIT: ${OPENROUTER_RPM_LIMIT:-60}
-      GARAK_PARALLEL_ATTEMPTS: ${GARAK_PARALLEL_ATTEMPTS:-10}
-      GARAK_SOFT_PROBE_PROMPT_CAP: ${GARAK_SOFT_PROBE_PROMPT_CAP:-50}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-  beat:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.worker
-    restart: unless-stopped
-    command: >
-      celery -A garakboard.worker.celery_app:celery_app beat
-      --loglevel=info
-      --scheduler celery.beat:PersistentScheduler
-    environment:
-      DATABASE_URL: postgresql://garakboard:${POSTGRES_PASSWORD}@postgres:5432/garakboard
-      REDIS_URL: redis://redis:6379/0
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY in docker/.env}
-    depends_on:
-      redis:
-        condition: service_healthy
 
   frontend:
     build:
@@ -102,9 +88,7 @@ services:
     command: ["python", "-m", "garakboard.frontend.gradio_app"]
     environment:
       DATABASE_URL: postgresql://garakboard:${POSTGRES_PASSWORD}@postgres:5432/garakboard
-      REDIS_URL: redis://redis:6379/0
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY in docker/.env}
-      # Points to the API service name on the Docker network — not localhost
       API_BASE_URL: http://api:8000
       GRADIO_SERVER_PORT: "7860"
     ports:
@@ -113,23 +97,6 @@ services:
       api:
         condition: service_healthy
 
-  flower:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.worker
-    restart: unless-stopped
-    command: >
-      celery -A garakboard.worker.celery_app:celery_app flower
-      --port=5555
-    environment:
-      DATABASE_URL: postgresql://garakboard:${POSTGRES_PASSWORD}@postgres:5432/garakboard
-      REDIS_URL: redis://redis:6379/0
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY in docker/.env}
-    ports:
-      - "5555:5555"
-    depends_on:
-      redis:
-        condition: service_healthy
-
 volumes:
   pgdata:
+  prefect_data:
