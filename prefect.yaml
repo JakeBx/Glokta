@@ -11,8 +11,9 @@ pull:
 deployments:
   - name: scan-pending-runs
     entrypoint: src/garakboard/pipeline/flows.py:scan_pending_runs
+    concurrency_limit: 4
     schedules:
-      - interval: 120
+      - interval: 900
         timezone: UTC
     work_pool:
       name: garakboard-process-pool

@@ -110,8 +110,13 @@ class TestProcessPendingRuns:
         db_session.refresh(run)
         assert run.completed_at is not None
 
-    def test_processes_multiple_pending_runs(self, db_session):
-        """All pending runs are processed in a single call."""
+    def test_processes_exactly_one_run_per_invocation(self, db_session):
+        """Only one pending run is claimed per flow invocation.
+
+        This prevents concurrent flows from picking the same runs: after the first
+        db.commit() the FOR UPDATE lock is released.  A second concurrent flow
+        would pick up the remaining pending run from under a looping approach.
+        """
         from garakboard.pipeline.flows import _process_pending_runs
 
         model = _seed_model(db_session, "test/model-proc-5")
@@ -121,6 +126,14 @@ class TestProcessPendingRuns:
         mock_scan = MagicMock(return_value=None)
         _process_pending_runs(db_session, mock_scan)
 
+        assert mock_scan.call_count == 1
+        db_session.refresh(run1)
+        db_session.refresh(run2)
+        statuses = {run1.status, run2.status}
+        assert statuses == {"complete", "pending"}
+
+        # Second invocation claims the remaining run
+        _process_pending_runs(db_session, mock_scan)
         assert mock_scan.call_count == 2
         db_session.refresh(run1)
         db_session.refresh(run2)
@@ -138,6 +151,73 @@ class TestProcessPendingRuns:
         _process_pending_runs(db_session, mock_scan)
 
         mock_scan.assert_called_once_with(str(run.id), model.name, [])
+
+
+# ---------------------------------------------------------------------------
+# _reap_stale_runs — zombie run cleanup tests
+# ---------------------------------------------------------------------------
+
+
+class TestReapStaleRuns:
+    def test_marks_overdue_running_run_as_failed(self, db_session):
+        """A running run whose started_at is past the timeout is marked failed."""
+        from garakboard.pipeline.flows import _reap_stale_runs
+
+        model = _seed_model(db_session, "test/model-reap-1")
+        run = _seed_run(db_session, model, "running")
+        run.started_at = datetime.now(timezone.utc) - timedelta(hours=3)
+        db_session.flush()
+
+        reaped = _reap_stale_runs(db_session, stale_after_seconds=7200)
+
+        assert reaped == 1
+        db_session.refresh(run)
+        assert run.status == "failed"
+        assert run.completed_at is not None
+
+    def test_leaves_recently_started_running_run_alone(self, db_session):
+        """A running run within the timeout window is not touched."""
+        from garakboard.pipeline.flows import _reap_stale_runs
+
+        model = _seed_model(db_session, "test/model-reap-2")
+        run = _seed_run(db_session, model, "running")
+        run.started_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+        db_session.flush()
+
+        reaped = _reap_stale_runs(db_session, stale_after_seconds=7200)
+
+        assert reaped == 0
+        db_session.refresh(run)
+        assert run.status == "running"
+
+    def test_ignores_non_running_statuses(self, db_session):
+        """pending, complete, and failed runs are never reaped."""
+        from garakboard.pipeline.flows import _reap_stale_runs
+
+        model = _seed_model(db_session, "test/model-reap-3")
+        for status in ("pending", "complete", "failed"):
+            run = _seed_run(db_session, model, status)
+            run.started_at = datetime.now(timezone.utc) - timedelta(hours=10)
+        db_session.flush()
+
+        reaped = _reap_stale_runs(db_session, stale_after_seconds=7200)
+
+        assert reaped == 0
+
+    def test_leaves_running_run_with_no_started_at_alone(self, db_session):
+        """A running run with no started_at is not reaped (never started properly)."""
+        from garakboard.pipeline.flows import _reap_stale_runs
+
+        model = _seed_model(db_session, "test/model-reap-4")
+        run = _seed_run(db_session, model, "running")
+        run.started_at = None
+        db_session.flush()
+
+        reaped = _reap_stale_runs(db_session, stale_after_seconds=7200)
+
+        assert reaped == 0
+        db_session.refresh(run)
+        assert run.status == "running"
 
 
 # ---------------------------------------------------------------------------

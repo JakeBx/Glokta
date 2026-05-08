@@ -45,8 +45,39 @@ class EmptyIngestError(Exception):
 # ---------------------------------------------------------------------------
 
 
+def _reap_stale_runs(db: Session, stale_after_seconds: int) -> int:
+    """Mark runs stuck in 'running' past the scan timeout as 'failed'.
+
+    Protects against zombie runs left behind when the worker process is killed
+    mid-scan (OOM, SIGKILL, container restart) where the finally block never runs.
+
+    Returns the count of runs reaped.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)
+    stale = (
+        db.query(Run)
+        .filter(
+            Run.status == "running",
+            Run.started_at.isnot(None),
+            Run.started_at < cutoff,
+        )
+        .all()
+    )
+    for run in stale:
+        logger.warning("Reaping stale run %s (started_at=%s)", run.id, run.started_at)
+        run.status = "failed"
+        run.completed_at = datetime.now(timezone.utc)
+    if stale:
+        db.commit()
+    return len(stale)
+
+
 def _process_pending_runs(db: Session, scan_fn: Callable) -> None:
-    """Process all pending runs via scan_fn.
+    """Claim and process exactly one pending run via scan_fn.
+
+    Claiming one run per flow invocation closes the race condition where a looping
+    approach would release the FOR UPDATE lock on un-processed rows after the first
+    db.commit(), allowing a concurrent flow to pick up the same runs.
 
     scan_fn(run_id: str, model_name: str, probe_categories: list[str])
     Should raise on failure; return value is ignored.
@@ -54,29 +85,31 @@ def _process_pending_runs(db: Session, scan_fn: Callable) -> None:
     # SKIP LOCKED prevents concurrent workers from picking the same run.
     # Falls back to a plain query for dialects that don't support it (SQLite in tests).
     try:
-        pending = (
+        run = (
             db.query(Run)
             .filter(Run.status == "pending")
             .with_for_update(skip_locked=True)
-            .all()
+            .first()
         )
     except CompileError:
         db.rollback()
-        pending = db.query(Run).filter(Run.status == "pending").all()
+        run = db.query(Run).filter(Run.status == "pending").first()
 
-    for run in pending:
-        model = db.query(Model).filter(Model.id == run.model_id).first()
-        run.status = "running"
-        run.started_at = datetime.now(timezone.utc)
+    if run is None:
+        return
+
+    model = db.query(Model).filter(Model.id == run.model_id).first()
+    run.status = "running"
+    run.started_at = datetime.now(timezone.utc)
+    db.commit()
+    try:
+        scan_fn(str(run.id), model.name, [])
+        run.status = "complete"
+    except Exception:
+        run.status = "failed"
+    finally:
+        run.completed_at = datetime.now(timezone.utc)
         db.commit()
-        try:
-            scan_fn(str(run.id), model.name, [])
-            run.status = "complete"
-        except Exception:
-            run.status = "failed"
-        finally:
-            run.completed_at = datetime.now(timezone.utc)
-            db.commit()
 
 
 def _execute_scan(
@@ -260,9 +293,11 @@ def execute_garak_scan_task(
 
 @flow(name="scan-pending-runs", log_prints=True)
 def scan_pending_runs() -> None:
-    """Pick all pending runs and execute them. Scheduled every 2 minutes."""
+    """Reap zombie runs, then claim and execute one pending run. Scheduled every 15 minutes."""
     db = SessionLocal()
     try:
+        stale_after = settings.garak_timeout_seconds + 1800  # scan timeout + 30 min grace
+        _reap_stale_runs(db, stale_after)
         _process_pending_runs(
             db,
             lambda rid, mname, cats: execute_garak_scan_task(rid, mname, cats),

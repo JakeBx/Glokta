@@ -22,7 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 # garak + prefect are only needed in the pipeline container
 pipeline = [
-    "prefect>=3.0",
+    "prefect==3.7.0",
     "garak>=0.9",
 ]
 dev = [

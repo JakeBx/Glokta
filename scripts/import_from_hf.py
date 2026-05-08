@@ -7,7 +7,7 @@ Pulls the dataset from HF_DATASET_REPO and performs an idempotent merge:
   - runs        matched by primary key id       → skip on conflict, insert on miss
   - probe_results matched by (run_id, probe_name, detector) → skip on conflict, insert on miss
 
-Import order respects FK dependencies: models → runs → probe_results.
+Import order respects FK dependencies: models → runs → probe_results → attempts.
 
 Usage (conda dev env):
     PYTHONPATH=src conda run -n garakboard python scripts/import_from_hf.py
@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from garakboard.config import settings
 from garakboard.database import SessionLocal, init_db, migrate_db
-from garakboard.models import Model, Run, ProbeResult
+from garakboard.models import Model, Run, ProbeResult, Attempt
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -192,6 +192,45 @@ def import_probe_results(session, rows: list[dict], dry_run: bool) -> tuple[int,
     return inserted, skipped
 
 
+def import_attempts(session, rows: list[dict], dry_run: bool) -> tuple[int, int]:
+    """
+    Idempotent merge of attempt rows.
+    Match key: id (integer primary key exported from source DB).
+    Returns (inserted, skipped).
+    """
+    import json
+    inserted = 0
+    skipped = 0
+
+    existing_ids = {a.id for a in session.query(Attempt.id).all()}
+
+    for row in rows:
+        row_id = int(row["id"])
+        if row_id in existing_ids:
+            skipped += 1
+            continue
+
+        if not dry_run:
+            raw_outcome = row.get("detector_outcome")
+            detector_outcome = json.loads(raw_outcome) if isinstance(raw_outcome, str) else raw_outcome
+            attempt = Attempt(
+                id=row_id,
+                run_id=_parse_uuid(row["run_id"]),
+                probe_name=row["probe_name"],
+                prompt=row.get("prompt"),
+                response=row.get("response"),
+                detector_outcome=detector_outcome,
+                created_at=_parse_datetime(row.get("created_at")),
+            )
+            session.add(attempt)
+        inserted += 1
+
+    if not dry_run:
+        session.commit()
+
+    return inserted, skipped
+
+
 def dataset_split_to_rows(split) -> list[dict]:
     """Convert a HuggingFace Dataset split to a list of dicts."""
     return [split[i] for i in range(len(split))]
@@ -229,6 +268,7 @@ def main():
         models_ds = load_dataset(hf_repo, name="models", token=hf_token)
         runs_ds = load_dataset(hf_repo, name="runs", token=hf_token)
         probe_results_ds = load_dataset(hf_repo, name="probe_results", token=hf_token)
+        attempts_ds = load_dataset(hf_repo, name="attempts", token=hf_token)
     except Exception as e:
         print(f"\n✗ Failed to load dataset: {e}")
         sys.exit(1)
@@ -239,8 +279,9 @@ def main():
     model_rows = dataset_split_to_rows(models_ds["train"])
     run_rows = dataset_split_to_rows(runs_ds["train"])
     probe_result_rows = dataset_split_to_rows(probe_results_ds["train"])
+    attempt_rows = dataset_split_to_rows(attempts_ds["train"])
 
-    print(f"  Downloaded: {len(model_rows)} models, {len(run_rows)} runs, {len(probe_result_rows)} probe_results")
+    print(f"  Downloaded: {len(model_rows)} models, {len(run_rows)} runs, {len(probe_result_rows)} probe_results, {len(attempt_rows)} attempts")
     print()
 
     init_db()
@@ -259,6 +300,10 @@ def main():
         print("  Merging probe_results...", end=" ", flush=True)
         pr_inserted, pr_skipped = import_probe_results(session, probe_result_rows, args.dry_run)
         print(f"inserted={pr_inserted}, skipped={pr_skipped}")
+
+        print("  Merging attempts...", end=" ", flush=True)
+        a_inserted, a_skipped = import_attempts(session, attempt_rows, args.dry_run)
+        print(f"inserted={a_inserted}, skipped={a_skipped}")
     except Exception as e:
         session.rollback()
         print(f"\n✗ Import failed: {e}")
@@ -277,6 +322,7 @@ def main():
     print(f"  models:        inserted={m_inserted}, skipped={m_skipped}")
     print(f"  runs:          inserted={r_inserted}, skipped={r_skipped}")
     print(f"  probe_results: inserted={pr_inserted}, skipped={pr_skipped}")
+    print(f"  attempts:      inserted={a_inserted}, skipped={a_skipped}")
 
 
 if __name__ == "__main__":

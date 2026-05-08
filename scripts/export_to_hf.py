@@ -2,7 +2,7 @@
 """
 Export the GarakBoard database to a HuggingFace dataset.
 
-Exports three tables — models, runs, probe_results — as a multi-split DatasetDict
+Exports four tables — models, runs, probe_results, attempts — as a multi-split DatasetDict
 and pushes it to the HuggingFace Hub repository defined by HF_DATASET_REPO.
 
 Usage (conda dev env):
@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from garakboard.config import settings
 from garakboard.database import SessionLocal, init_db, migrate_db
-from garakboard.models import Model, Run, ProbeResult
+from garakboard.models import Model, Run, ProbeResult, Attempt
 
 
 def _date_to_str(value) -> str | None:
@@ -99,6 +99,23 @@ def export_probe_results(session) -> list[dict]:
     return rows
 
 
+def export_attempts(session) -> list[dict]:
+    """Serialise all rows from the attempts table."""
+    import json
+    rows = []
+    for a in session.query(Attempt).order_by(Attempt.run_id, Attempt.id).all():
+        rows.append({
+            "id": a.id,
+            "run_id": str(a.run_id),
+            "probe_name": a.probe_name,
+            "prompt": a.prompt,
+            "response": a.response,
+            "detector_outcome": json.dumps(a.detector_outcome) if a.detector_outcome is not None else None,
+            "created_at": _date_to_str(a.created_at),
+        })
+    return rows
+
+
 def rows_to_dataset(rows: list[dict]):
     """Convert a list of dicts to a HuggingFace Dataset."""
     from datasets import Dataset
@@ -155,6 +172,10 @@ def main():
         print("  Querying probe_results...", end=" ", flush=True)
         probe_result_rows = export_probe_results(session)
         print(f"{len(probe_result_rows)} rows")
+
+        print("  Querying attempts...", end=" ", flush=True)
+        attempt_rows = export_attempts(session)
+        print(f"{len(attempt_rows)} rows")
     finally:
         session.close()
 
@@ -166,6 +187,7 @@ def main():
         "models": rows_to_dataset(model_rows),
         "runs": rows_to_dataset(run_rows),
         "probe_results": rows_to_dataset(probe_result_rows),
+        "attempts": rows_to_dataset(attempt_rows),
     })
     print("done")
 
@@ -193,6 +215,7 @@ def main():
     print(f"  models:        {len(model_rows)} rows")
     print(f"  runs:          {len(run_rows)} rows")
     print(f"  probe_results: {len(probe_result_rows)} rows")
+    print(f"  attempts:      {len(attempt_rows)} rows")
 
 
 if __name__ == "__main__":

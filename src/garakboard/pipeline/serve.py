@@ -19,7 +19,7 @@ async def _serve():
     await asyncio.gather(
         scan_pending_runs.serve(
             name="scan-pending-runs",
-            interval=120,  # every 2 minutes
+            interval=900,  # every 15 minutes
         ),
         discover_and_queue_scans.serve(
             name="discover-and-queue-scans",
