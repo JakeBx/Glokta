@@ -141,7 +141,7 @@ class TestProcessPendingRuns:
         assert run2.status == "complete"
 
     def test_scan_fn_called_with_run_id_and_model_name(self, db_session):
-        """scan_fn receives (run_id_str, model_name, probe_categories)."""
+        """scan_fn receives (run_id_str, model_name, probe_categories, cap, parallel, timeout)."""
         from garakboard.pipeline.flows import _process_pending_runs
 
         model = _seed_model(db_session, "test/model-proc-6")
@@ -150,7 +150,27 @@ class TestProcessPendingRuns:
         mock_scan = MagicMock(return_value=None)
         _process_pending_runs(db_session, mock_scan)
 
-        mock_scan.assert_called_once_with(str(run.id), model.name, [])
+        mock_scan.assert_called_once_with(str(run.id), model.name, [], None, None, None)
+
+    def test_scan_fn_passes_per_run_overrides(self, db_session):
+        """scan_fn receives per-run probe_prompt_cap, parallel_attempts_override, scan_timeout_seconds."""
+        from garakboard.pipeline.flows import _process_pending_runs
+        import json
+
+        model = _seed_model(db_session, "test/model-proc-7")
+        run = _seed_run(db_session, model, "pending")
+        run.probe_categories_json = json.dumps(["dan", "goodside"])
+        run.probe_prompt_cap = 150
+        run.parallel_attempts_override = 16
+        run.scan_timeout_seconds = 14400
+        db_session.flush()
+
+        mock_scan = MagicMock(return_value=None)
+        _process_pending_runs(db_session, mock_scan)
+
+        mock_scan.assert_called_once_with(
+            str(run.id), model.name, ["dan", "goodside"], 150, 16, 14400
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +238,37 @@ class TestReapStaleRuns:
         assert reaped == 0
         db_session.refresh(run)
         assert run.status == "running"
+
+
+# ---------------------------------------------------------------------------
+# _should_retry — retry condition function tests
+# ---------------------------------------------------------------------------
+
+
+class TestShouldRetry:
+    def test_returns_false_for_empty_ingest_error(self):
+        """EmptyIngestError must not be retried — garak produced no output."""
+        from garakboard.pipeline.flows import _should_retry, EmptyIngestError
+
+        state = MagicMock()
+        state.result.return_value = EmptyIngestError("no results")
+        assert not _should_retry(None, None, state)
+
+    def test_returns_false_for_stale_run_error(self):
+        """StaleRunError must not be retried — run is no longer in 'running' state."""
+        from garakboard.pipeline.flows import _should_retry, StaleRunError
+
+        state = MagicMock()
+        state.result.return_value = StaleRunError("run is failed")
+        assert not _should_retry(None, None, state)
+
+    def test_returns_true_for_other_exceptions(self):
+        """Transient errors (network, subprocess) should trigger retries."""
+        from garakboard.pipeline.flows import _should_retry
+
+        state = MagicMock()
+        state.result.return_value = RuntimeError("transient network error")
+        assert _should_retry(None, None, state)
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 import yaml
@@ -25,6 +26,20 @@ DEFAULT_PROBE_CATEGORIES = [
     "leakreplay",      # Information leakage — training data memorization
     "snowball",        # Safety alignment — escalating false claims
     "badchars",        # Prompt injection — control character evasion
+]
+
+# LLM01-focused probe set for training data collection runs.
+# atkgen is excluded — queue it as a separate Run (interactive overhead).
+TRAINING_PROBE_CATEGORIES = [
+    "dan",
+    "goodside",
+    "encoding",
+    "jailbreak",
+    "grandma",
+    "tap",
+    "suffix",
+    "realtoxicityprompts",
+    "lmrc",
 ]
 
 
@@ -139,7 +154,12 @@ def build_garak_config(
     return config
 
 
-def run_garak(config: dict, api_key: str, timeout: int = GARAK_TIMEOUT_SECONDS) -> str:
+def run_garak(
+    config: dict,
+    api_key: str,
+    timeout: int = GARAK_TIMEOUT_SECONDS,
+    pf_logger: logging.Logger | None = None,
+) -> str:
     """
     Write a garak YAML config and run garak as a subprocess.
 
@@ -163,39 +183,48 @@ def run_garak(config: dict, api_key: str, timeout: int = GARAK_TIMEOUT_SECONDS) 
         yaml.dump(config, config_file)
         config_path = config_file.name
 
+    _log = pf_logger or logger
     try:
         env = os.environ.copy()
         env["OPENROUTER_API_KEY"] = api_key
 
-        result = subprocess.run(
+        proc = subprocess.Popen(
             ["garak", "--config", config_path],
             env=env,
-            check=False,  # exit 1 = vulnerabilities found — normal garak behavior
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
+            bufsize=1,
         )
-        if result.stdout:
-            logger.info("garak stdout:\n%s", result.stdout[-2000:])
-        if result.stderr:
-            logger.info("garak stderr:\n%s", result.stderr[-2000:])
-        if result.returncode not in (0, 1):
-            logger.error(
-                "garak exited with unexpected code %d.\nstdout: %s\nstderr: %s",
-                result.returncode,
-                result.stdout,
-                result.stderr,
-            )
-            raise subprocess.CalledProcessError(
-                result.returncode, result.args, result.stdout, result.stderr
-            )
-    except subprocess.TimeoutExpired as exc:
-        logger.error(
-            "garak timed out after %d seconds for config %s",
-            timeout,
-            config_path,
-        )
-        raise
+
+        def _drain(stream: object, label: str) -> None:
+            try:
+                for line in stream:  # type: ignore[union-attr]
+                    _log.info("[garak %s] %s", label, line.rstrip())
+            except ValueError:
+                pass  # stream closed before we finished reading
+
+        t_out = threading.Thread(target=_drain, args=(proc.stdout, "stdout"), daemon=True)
+        t_err = threading.Thread(target=_drain, args=(proc.stderr, "stderr"), daemon=True)
+        t_out.start()
+        t_err.start()
+
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            t_out.join(timeout=5)
+            t_err.join(timeout=5)
+            _log.error("garak timed out after %d seconds for config %s", timeout, config_path)
+            raise subprocess.TimeoutExpired(proc.args, timeout)
+
+        t_out.join()
+        t_err.join()
+
+        if proc.returncode not in (0, 1):
+            _log.error("garak exited with unexpected code %d", proc.returncode)
+            raise subprocess.CalledProcessError(proc.returncode, proc.args)
     finally:
         os.unlink(config_path)
 

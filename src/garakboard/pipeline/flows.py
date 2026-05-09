@@ -11,6 +11,7 @@ Architecture:
 """
 
 import io
+import json
 import logging
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -40,47 +41,21 @@ class EmptyIngestError(Exception):
     """Raised when garak exits cleanly but produces no probe results or attempts."""
 
 
+class StaleRunError(Exception):
+    """Raised when a run is no longer in 'running' state at retry time."""
+
+
 # ---------------------------------------------------------------------------
 # Pure business logic — no Prefect dependency, fully testable
 # ---------------------------------------------------------------------------
 
 
-def _reap_stale_runs(db: Session, stale_after_seconds: int) -> int:
-    """Mark runs stuck in 'running' past the scan timeout as 'failed'.
-
-    Protects against zombie runs left behind when the worker process is killed
-    mid-scan (OOM, SIGKILL, container restart) where the finally block never runs.
-
-    Returns the count of runs reaped.
-    """
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)
-    stale = (
-        db.query(Run)
-        .filter(
-            Run.status == "running",
-            Run.started_at.isnot(None),
-            Run.started_at < cutoff,
-        )
-        .all()
-    )
-    for run in stale:
-        logger.warning("Reaping stale run %s (started_at=%s)", run.id, run.started_at)
-        run.status = "failed"
-        run.completed_at = datetime.now(timezone.utc)
-    if stale:
-        db.commit()
-    return len(stale)
-
-
 def _process_pending_runs(db: Session, scan_fn: Callable) -> None:
-    """Claim and process exactly one pending run via scan_fn.
+    """Process one pending run via scan_fn. Call repeatedly to drain the queue.
 
-    Claiming one run per flow invocation closes the race condition where a looping
-    approach would release the FOR UPDATE lock on un-processed rows after the first
-    db.commit(), allowing a concurrent flow to pick up the same runs.
-
-    scan_fn(run_id: str, model_name: str, probe_categories: list[str])
-    Should raise on failure; return value is ignored.
+    scan_fn(run_id, model_name, probe_categories, probe_prompt_cap,
+            parallel_attempts_override, scan_timeout_seconds)
+    Should raise on failure (after all Prefect retries exhausted).
     """
     # SKIP LOCKED prevents concurrent workers from picking the same run.
     # Falls back to a plain query for dialects that don't support it (SQLite in tests).
@@ -91,25 +66,58 @@ def _process_pending_runs(db: Session, scan_fn: Callable) -> None:
             .with_for_update(skip_locked=True)
             .first()
         )
-    except CompileError:
+    except Exception:
         db.rollback()
         run = db.query(Run).filter(Run.status == "pending").first()
 
     if run is None:
         return
-
     model = db.query(Model).filter(Model.id == run.model_id).first()
     run.status = "running"
     run.started_at = datetime.now(timezone.utc)
     db.commit()
+
+    probe_categories = json.loads(run.probe_categories_json) if run.probe_categories_json else []
+
     try:
-        scan_fn(str(run.id), model.name, [])
+        scan_fn(
+            str(run.id),
+            model.name,
+            probe_categories,
+            run.probe_prompt_cap,
+            run.parallel_attempts_override,
+            run.scan_timeout_seconds,
+        )
         run.status = "complete"
-    except Exception:
-        run.status = "failed"
-    finally:
         run.completed_at = datetime.now(timezone.utc)
         db.commit()
+    except Exception:
+        # Re-fetch to see the current DB state — the task may have written "complete"
+        # on a successful retry before the exception propagated here (defensive guard).
+        run = db.query(Run).filter(Run.id == run.id).first()
+        if run.status != "complete":
+            run.status = "failed"
+            run.completed_at = datetime.now(timezone.utc)
+            db.commit()
+
+
+def _reap_stale_runs(db: Session, stale_after_seconds: int) -> int:
+    """Mark 'running' runs as 'failed' when started_at is older than stale_after_seconds.
+
+    Returns the number of runs reaped. Runs with no started_at are never reaped.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)
+    stale = (
+        db.query(Run)
+        .filter(Run.status == "running", Run.started_at <= cutoff)
+        .all()
+    )
+    for run in stale:
+        run.status = "failed"
+        run.completed_at = datetime.now(timezone.utc)
+    if stale:
+        db.commit()
+    return len(stale)
 
 
 def _execute_scan(
@@ -117,6 +125,9 @@ def _execute_scan(
     model_name: str,
     probe_categories: list[str],
     db: Session,
+    probe_prompt_cap: int | None = None,
+    parallel_attempts_override: int | None = None,
+    scan_timeout_seconds: int | None = None,
 ) -> dict:
     """Core garak execution: build config, run, ingest JSONL.
 
@@ -145,16 +156,16 @@ def _execute_scan(
             model_name=model_name,
             probe_categories=probe_categories,
             output_dir=output_dir,
-            parallel_attempts=settings.garak_parallel_attempts,
+            parallel_attempts=parallel_attempts_override or settings.garak_parallel_attempts,
             rpm_limit=settings.openrouter_rpm_limit,
-            soft_probe_prompt_cap=settings.garak_soft_probe_prompt_cap,
+            soft_probe_prompt_cap=probe_prompt_cap or settings.garak_soft_probe_prompt_cap,
             probe_spec_override=",".join(remaining),
         )
 
         jsonl_path = run_garak(
             config,
             settings.openrouter_api_key,
-            timeout=settings.garak_timeout_seconds,
+            timeout=scan_timeout_seconds or settings.garak_timeout_seconds,
         )
 
         # Store run metadata while the temp dir is still alive
@@ -272,35 +283,78 @@ def _discover_and_queue(
 # Prefect tasks and flows
 # ---------------------------------------------------------------------------
 
+_NO_RETRY_EXCEPTIONS = (EmptyIngestError, StaleRunError)
+_RETRY_DELAYS = [30, 60, 120]
+
+
+def _should_retry(task, task_run, state) -> bool:
+    exc = state.result(raise_on_failure=False)
+    return not isinstance(exc, _NO_RETRY_EXCEPTIONS)
+
 
 @task(
     name="execute-garak-scan",
     retries=3,
-    retry_delay_seconds=[30, 60, 120],
+    retry_delay_seconds=_RETRY_DELAYS,
+    timeout_seconds=settings.garak_timeout_seconds + 300,
+    retry_condition_fn=_should_retry,
 )
 def execute_garak_scan_task(
     run_id: str,
     model_name: str,
     probe_categories: list[str],
+    probe_prompt_cap: int | None = None,
+    parallel_attempts_override: int | None = None,
+    scan_timeout_seconds: int | None = None,
 ) -> dict:
     """Prefect task: run a garak scan with automatic retries on failure."""
     db = SessionLocal()
     try:
-        return _execute_scan(run_id, model_name, probe_categories, db)
+        # Stale-run guard: abort without retrying if a prior except block already
+        # advanced the run beyond "running" (StaleRunError is in _NO_RETRY_EXCEPTIONS).
+        run = db.query(Run).filter(Run.id == run_id).first()
+        if run is None or run.status != "running":
+            raise StaleRunError(
+                f"Run {run_id} is in state '{getattr(run, 'status', 'missing')}'; skipping attempt"
+            )
+
+        result = _execute_scan(
+            run_id,
+            model_name,
+            probe_categories,
+            db,
+            probe_prompt_cap=probe_prompt_cap,
+            parallel_attempts_override=parallel_attempts_override,
+            scan_timeout_seconds=scan_timeout_seconds,
+        )
+
+        # Write "complete" here so the DB reflects success even if the exception
+        # propagates to _process_pending_runs between retry attempts.
+        if not result.get("skipped"):
+            db.refresh(run)
+            run.status = "complete"
+            run.completed_at = datetime.now(timezone.utc)
+            db.commit()
+
+        return result
     finally:
         db.close()
 
 
 @flow(name="scan-pending-runs", log_prints=True)
 def scan_pending_runs() -> None:
-    """Reap zombie runs, then claim and execute one pending run. Scheduled every 15 minutes."""
+    """Pick one pending run and execute it. Scheduled every 2 minutes."""
     db = SessionLocal()
     try:
-        stale_after = settings.garak_timeout_seconds + 1800  # scan timeout + 30 min grace
+        # Grace period covers 4 attempts × garak timeout + sum of retry delays + buffer.
+        stale_after = (settings.garak_timeout_seconds * 4) + sum(_RETRY_DELAYS) + 600
         _reap_stale_runs(db, stale_after)
+
         _process_pending_runs(
             db,
-            lambda rid, mname, cats: execute_garak_scan_task(rid, mname, cats),
+            lambda rid, mname, cats, cap, parallel, timeout: execute_garak_scan_task(
+                rid, mname, cats, cap, parallel, timeout
+            ),
         )
     finally:
         db.close()

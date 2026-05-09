@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Enum, String, Text, DateTime, ForeignKey, Index
+from sqlalchemy import Enum, Integer, String, Text, DateTime, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from garakboard.database import Base
@@ -30,6 +30,11 @@ class Run(Base):
         nullable=False,
         default="api",
     )
+    # Per-run overrides for training data collection runs (NULL = use global settings)
+    probe_categories_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    probe_prompt_cap: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    parallel_attempts_override: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    scan_timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(
         Enum("pending", "running", "complete", "failed", name="run_status"),
         nullable=False,

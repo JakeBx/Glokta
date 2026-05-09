@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_rpm_limit: int = 60  # conservative free-tier default; override via env
     garak_parallel_attempts: int = 10
-    garak_timeout_seconds: int = 7200
+    garak_timeout_seconds: int = 7200 * 4
     garak_soft_probe_prompt_cap: int = 50   # meaningful sample size per probe
     garak_soft_probe_prompt_cap_max: int = 50
 
