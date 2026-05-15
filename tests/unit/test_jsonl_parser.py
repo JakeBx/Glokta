@@ -3,14 +3,14 @@
 import json
 import pytest
 
-from garakboard.models import ProbeResult, Attempt
+from glokta.models import ProbeResult, Attempt
 
 
 # --- parse_eval_entry tests ---
 
 def test_parse_eval_entry_returns_probe_result(db_session):
     """parse_eval_entry returns a ProbeResult instance."""
-    from garakboard.ingest.jsonl_parser import parse_eval_entry
+    from glokta.ingest.jsonl_parser import parse_eval_entry
 
     entry = {
         "entry_type": "eval",
@@ -29,7 +29,7 @@ def test_parse_eval_entry_returns_probe_result(db_session):
 
 def test_parse_eval_entry_extracts_probe_category(db_session):
     """probe_category is extracted as the part before the first dot in probe name."""
-    from garakboard.ingest.jsonl_parser import parse_eval_entry
+    from glokta.ingest.jsonl_parser import parse_eval_entry
 
     entry = {
         "entry_type": "eval",
@@ -49,7 +49,7 @@ def test_parse_eval_entry_extracts_probe_category(db_session):
 
 def test_parse_eval_entry_maps_passed_to_pass_count(db_session):
     """'passed' field in entry maps to pass_count on ProbeResult."""
-    from garakboard.ingest.jsonl_parser import parse_eval_entry
+    from glokta.ingest.jsonl_parser import parse_eval_entry
 
     entry = {
         "entry_type": "eval",
@@ -68,7 +68,7 @@ def test_parse_eval_entry_maps_passed_to_pass_count(db_session):
 
 def test_parse_eval_entry_maps_failed_to_fail_count(db_session):
     """'failed' field in entry maps to fail_count on ProbeResult."""
-    from garakboard.ingest.jsonl_parser import parse_eval_entry
+    from glokta.ingest.jsonl_parser import parse_eval_entry
 
     entry = {
         "entry_type": "eval",
@@ -87,7 +87,7 @@ def test_parse_eval_entry_maps_failed_to_fail_count(db_session):
 
 def test_parse_eval_entry_maps_score(db_session):
     """'score' field maps to score on ProbeResult."""
-    from garakboard.ingest.jsonl_parser import parse_eval_entry
+    from glokta.ingest.jsonl_parser import parse_eval_entry
 
     entry = {
         "entry_type": "eval",
@@ -106,7 +106,7 @@ def test_parse_eval_entry_maps_score(db_session):
 
 def test_parse_eval_entry_score_can_be_none(db_session):
     """score is None when not present in entry."""
-    from garakboard.ingest.jsonl_parser import parse_eval_entry
+    from glokta.ingest.jsonl_parser import parse_eval_entry
 
     entry = {
         "entry_type": "eval",
@@ -124,7 +124,7 @@ def test_parse_eval_entry_score_can_be_none(db_session):
 
 def test_parse_eval_entry_wrong_type_raises_value_error(db_session):
     """ValueError raised when entry_type is not 'eval'."""
-    from garakboard.ingest.jsonl_parser import parse_eval_entry
+    from glokta.ingest.jsonl_parser import parse_eval_entry
 
     entry = {
         "entry_type": "attempt",
@@ -143,7 +143,7 @@ def test_parse_eval_entry_wrong_type_raises_value_error(db_session):
 
 def test_parse_eval_entry_probe_without_dot(db_session):
     """probe_category equals probe_name when probe has no dot."""
-    from garakboard.ingest.jsonl_parser import parse_eval_entry
+    from glokta.ingest.jsonl_parser import parse_eval_entry
 
     entry = {
         "entry_type": "eval",
@@ -166,7 +166,7 @@ def test_parse_eval_entry_probe_without_dot(db_session):
 
 def test_parse_attempt_entry_returns_attempt(db_session):
     """parse_attempt_entry returns an Attempt instance."""
-    from garakboard.ingest.jsonl_parser import parse_attempt_entry
+    from glokta.ingest.jsonl_parser import parse_attempt_entry
 
     entry = {
         "entry_type": "attempt",
@@ -184,7 +184,7 @@ def test_parse_attempt_entry_returns_attempt(db_session):
 
 def test_parse_attempt_entry_stores_detector_results_as_json(db_session):
     """detector_results dict stored as detector_outcome on Attempt."""
-    from garakboard.ingest.jsonl_parser import parse_attempt_entry
+    from glokta.ingest.jsonl_parser import parse_attempt_entry
 
     detector_results = {"always.Fail": False, "some.Detector": True}
     entry = {
@@ -203,7 +203,7 @@ def test_parse_attempt_entry_stores_detector_results_as_json(db_session):
 
 def test_parse_attempt_entry_handles_null_prompt_and_response(db_session):
     """Null prompt and response do not raise an error."""
-    from garakboard.ingest.jsonl_parser import parse_attempt_entry
+    from glokta.ingest.jsonl_parser import parse_attempt_entry
 
     entry = {
         "entry_type": "attempt",
@@ -222,7 +222,7 @@ def test_parse_attempt_entry_handles_null_prompt_and_response(db_session):
 
 def test_parse_attempt_entry_wrong_type_raises_value_error(db_session):
     """ValueError raised when entry_type is not 'attempt'."""
-    from garakboard.ingest.jsonl_parser import parse_attempt_entry
+    from glokta.ingest.jsonl_parser import parse_attempt_entry
 
     entry = {
         "entry_type": "eval",
@@ -240,7 +240,7 @@ def test_parse_attempt_entry_wrong_type_raises_value_error(db_session):
 
 def test_parse_attempt_entry_empty_detector_results(db_session):
     """Empty detector_results stored as empty dict."""
-    from garakboard.ingest.jsonl_parser import parse_attempt_entry
+    from glokta.ingest.jsonl_parser import parse_attempt_entry
 
     entry = {
         "entry_type": "attempt",
@@ -261,7 +261,7 @@ def test_parse_attempt_entry_empty_detector_results(db_session):
 
 def test_ingest_eval_file_inserts_probe_results(db_session, tmp_path):
     """ingest_jsonl_file inserts correct number of ProbeResult rows from eval file."""
-    from garakboard.ingest.jsonl_parser import ingest_jsonl_file
+    from glokta.ingest.jsonl_parser import ingest_jsonl_file
 
     jsonl_file = tmp_path / "eval.jsonl"
     jsonl_file.write_text(
@@ -283,7 +283,7 @@ def test_ingest_eval_file_inserts_probe_results(db_session, tmp_path):
 
 def test_ingest_attempt_file_inserts_attempts(db_session, tmp_path):
     """ingest_jsonl_file inserts correct number of Attempt rows from attempt file."""
-    from garakboard.ingest.jsonl_parser import ingest_jsonl_file
+    from glokta.ingest.jsonl_parser import ingest_jsonl_file
 
     jsonl_file = tmp_path / "attempts.jsonl"
     jsonl_file.write_text(
@@ -305,7 +305,7 @@ def test_ingest_attempt_file_inserts_attempts(db_session, tmp_path):
 
 def test_ingest_mixed_file_handles_all_types(db_session, tmp_path):
     """ingest_jsonl_file correctly processes a mixed file with eval, attempt, and unknown entries."""
-    from garakboard.ingest.jsonl_parser import ingest_jsonl_file
+    from glokta.ingest.jsonl_parser import ingest_jsonl_file
 
     jsonl_file = tmp_path / "mixed.jsonl"
     jsonl_file.write_text(
@@ -325,7 +325,7 @@ def test_ingest_mixed_file_handles_all_types(db_session, tmp_path):
 
 def test_ingest_skips_unknown_entry_types(db_session, tmp_path):
     """Unknown entry_type entries are silently skipped and counted in skipped_count."""
-    from garakboard.ingest.jsonl_parser import ingest_jsonl_file
+    from glokta.ingest.jsonl_parser import ingest_jsonl_file
 
     jsonl_file = tmp_path / "unknown.jsonl"
     jsonl_file.write_text(
@@ -343,7 +343,7 @@ def test_ingest_skips_unknown_entry_types(db_session, tmp_path):
 
 def test_ingest_returns_correct_counts(db_session, tmp_path):
     """IngestResult counts match actual rows inserted."""
-    from garakboard.ingest.jsonl_parser import ingest_jsonl_file, IngestResult
+    from glokta.ingest.jsonl_parser import ingest_jsonl_file, IngestResult
 
     jsonl_file = tmp_path / "counts.jsonl"
     jsonl_file.write_text(
@@ -365,7 +365,7 @@ def test_ingest_returns_correct_counts(db_session, tmp_path):
 
 def test_ingest_file_not_found_raises(db_session):
     """FileNotFoundError raised when file_path does not exist."""
-    from garakboard.ingest.jsonl_parser import ingest_jsonl_file
+    from glokta.ingest.jsonl_parser import ingest_jsonl_file
 
     run_id = "11111111-1111-1111-1111-111111111111"
 
@@ -375,7 +375,7 @@ def test_ingest_file_not_found_raises(db_session):
 
 def test_ingest_handles_json_decode_error(db_session, tmp_path):
     """Lines with invalid JSON are skipped and counted as skipped."""
-    from garakboard.ingest.jsonl_parser import ingest_jsonl_file
+    from glokta.ingest.jsonl_parser import ingest_jsonl_file
 
     jsonl_file = tmp_path / "bad_json.jsonl"
     jsonl_file.write_text(

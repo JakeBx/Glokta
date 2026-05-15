@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for GarakBoard."""
+"""Shared pytest fixtures for Glokta."""
 
 import os
 import pytest
@@ -9,9 +9,9 @@ from fastapi.testclient import TestClient
 # Set testing flag BEFORE importing app to prevent DB connection at import time
 os.environ["TESTING"] = "1"
 
-from garakboard.database import Base
-from garakboard.api.app import create_app
-from garakboard.api.deps import get_db
+from glokta.database import Base
+from glokta.api.app import create_app
+from glokta.api.deps import get_db
 
 
 @pytest.fixture(scope="session")

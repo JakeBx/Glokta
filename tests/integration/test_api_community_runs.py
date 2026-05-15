@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from garakboard.models import Model, Run
+from glokta.models import Model, Run
 
 SAMPLE_CONFIG_YAML = b"plugins:\n  target_name: test/model:free\n"
 SAMPLE_JSONL = (
@@ -106,7 +106,7 @@ def test_community_run_submit_idempotent_model(api_client: TestClient, db_sessio
 
 
 def test_community_run_submit_probe_results_ingested(api_client: TestClient, db_session: Session):
-    from garakboard.models import ProbeResult
+    from glokta.models import ProbeResult
     resp = _post_community_run(api_client)
     run_id = resp.json()["id"]
     results = db_session.query(ProbeResult).filter(ProbeResult.run_id == uuid.UUID(run_id)).all()

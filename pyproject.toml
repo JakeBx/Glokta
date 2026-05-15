@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "garakboard"
+name = "glokta"
 version = "0.1.0"
 description = "Open LLM Security Leaderboard built on garak"
 requires-python = ">=3.11"
@@ -44,8 +44,8 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "--cov=garakboard --cov-report=term-missing -v"
+addopts = "--cov=glokta --cov-report=term-missing -v"
 
 [tool.coverage.run]
-source = ["src/garakboard"]
+source = ["src/glokta"]
 omit = ["tests/*"]

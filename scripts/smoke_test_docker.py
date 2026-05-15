@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Smoke test: run a minimal garak scan via the Docker-deployed GarakBoard stack.
+Smoke test: run a minimal garak scan via the Docker-deployed Glokta stack.
 
 Equivalent to scripts/smoke_test_garak.py but exercises the full deployment:
   API → Celery worker → garak subprocess → JSONL ingest → DB write.
@@ -9,7 +9,7 @@ Prerequisites:
     docker compose -f docker/docker-compose.yml --env-file docker/.env up -d
     # Then seed models:
     docker compose -f docker/docker-compose.yml --env-file docker/.env exec api \
-        python -c "from garakboard.database import SessionLocal, init_db; ..."
+        python -c "from glokta.database import SessionLocal, init_db; ..."
 
 Usage:
     python scripts/smoke_test_docker.py
@@ -74,7 +74,7 @@ def find_model_id(name: str) -> str:
 
 
 def main() -> None:
-    print("GarakBoard Docker smoke test")
+    print("Glokta Docker smoke test")
     print(f"  API   : {API_BASE}")
     print(f"  model : {MODEL_NAME}")
     print(f"  probes: {PROBES}")

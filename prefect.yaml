@@ -1,4 +1,4 @@
-name: garakboard
+name: glokta
 prefect-version: "3.7.0"
 
 build: null
@@ -10,20 +10,20 @@ pull:
 
 deployments:
   - name: scan-pending-runs
-    entrypoint: src/garakboard/pipeline/flows.py:scan_pending_runs
+    entrypoint: src/glokta/pipeline/flows.py:scan_pending_runs
     concurrency_limit: 4
     schedules:
       - interval: 900
         timezone: UTC
     work_pool:
-      name: garakboard-process-pool
+      name: glokta-process-pool
       job_variables: {}
 
   - name: discover-and-queue-scans
-    entrypoint: src/garakboard/pipeline/flows.py:discover_and_queue_scans
+    entrypoint: src/glokta/pipeline/flows.py:discover_and_queue_scans
     schedules:
       - cron: "0 2 * * 1"
         timezone: UTC
     work_pool:
-      name: garakboard-process-pool
+      name: glokta-process-pool
       job_variables: {}

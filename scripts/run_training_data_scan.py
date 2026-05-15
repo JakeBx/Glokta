@@ -8,9 +8,8 @@ Creates two Run records per target model:
 Usage:
     PYTHONPATH=src python scripts/run_training_data_scan.py [--model MODEL_ID] [--dry-run] [--overwrite]
 
-Run in priority order per data-requirements.md, assessing hit counts between models:
+Run in priority order per data-requirements.md:
     python scripts/run_training_data_scan.py --model x-ai/grok-3-mini
-    python scripts/assess_garak_dataset.py
     python scripts/run_training_data_scan.py --model x-ai/grok-3
     ...
 """
@@ -23,9 +22,9 @@ from datetime import date
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from garakboard.database import SessionLocal, init_db
-from garakboard.models import Model, Run
-from garakboard.worker.garak_runner import TRAINING_PROBE_CATEGORIES
+from glokta.database import SessionLocal, init_db
+from glokta.models import Model, Run
+from glokta.worker.garak_runner import TRAINING_PROBE_CATEGORIES
 
 TARGET_MODELS = [
     # "x-ai/grok-3-mini",

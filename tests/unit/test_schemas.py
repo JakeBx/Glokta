@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from garakboard.models import Model, Run, ProbeResult
+from glokta.models import Model, Run, ProbeResult
 
 
 # --- ModelCreate / ModelResponse ---
@@ -14,7 +14,7 @@ from garakboard.models import Model, Run, ProbeResult
 
 def test_model_create_requires_name():
     """ModelCreate raises ValidationError when name is missing."""
-    from garakboard.schemas import ModelCreate
+    from glokta.schemas import ModelCreate
 
     with pytest.raises(ValidationError) as exc_info:
         ModelCreate(provider="test", snapshot_date=date.today())
@@ -23,7 +23,7 @@ def test_model_create_requires_name():
 
 def test_model_create_requires_provider():
     """ModelCreate raises ValidationError when provider is missing."""
-    from garakboard.schemas import ModelCreate
+    from glokta.schemas import ModelCreate
 
     with pytest.raises(ValidationError) as exc_info:
         ModelCreate(name="test-model", snapshot_date=date.today())
@@ -32,7 +32,7 @@ def test_model_create_requires_provider():
 
 def test_model_create_requires_snapshot_date():
     """ModelCreate raises ValidationError when snapshot_date is missing."""
-    from garakboard.schemas import ModelCreate
+    from glokta.schemas import ModelCreate
 
     with pytest.raises(ValidationError) as exc_info:
         ModelCreate(name="test-model", provider="test")
@@ -41,7 +41,7 @@ def test_model_create_requires_snapshot_date():
 
 def test_model_create_version_is_optional():
     """ModelCreate succeeds when version is not provided."""
-    from garakboard.schemas import ModelCreate
+    from glokta.schemas import ModelCreate
 
     model = ModelCreate(name="test-model", provider="test", snapshot_date=date.today())
     assert model.version is None
@@ -49,7 +49,7 @@ def test_model_create_version_is_optional():
 
 def test_model_create_is_active_defaults_to_true():
     """ModelCreate.is_active defaults to True."""
-    from garakboard.schemas import ModelCreate
+    from glokta.schemas import ModelCreate
 
     model = ModelCreate(name="test-model", provider="test", snapshot_date=date.today())
     assert model.is_active is True
@@ -57,7 +57,7 @@ def test_model_create_is_active_defaults_to_true():
 
 def test_model_response_from_orm(db_session):
     """ModelResponse.model_validate() succeeds on a persisted Model ORM instance."""
-    from garakboard.schemas import ModelResponse
+    from glokta.schemas import ModelResponse
 
     orm_obj = Model(
         name="orm-test-model",
@@ -76,7 +76,7 @@ def test_model_response_from_orm(db_session):
 
 def test_model_response_id_is_uuid(db_session):
     """ModelResponse.id is a UUID type."""
-    from garakboard.schemas import ModelResponse
+    from glokta.schemas import ModelResponse
 
     orm_obj = Model(
         name="uuid-test-model",
@@ -95,7 +95,7 @@ def test_model_response_id_is_uuid(db_session):
 
 def test_run_create_requires_model_id():
     """RunCreate raises ValidationError when model_id is missing."""
-    from garakboard.schemas import RunCreate
+    from glokta.schemas import RunCreate
 
     with pytest.raises(ValidationError) as exc_info:
         RunCreate(probe_categories=["test"])
@@ -104,7 +104,7 @@ def test_run_create_requires_model_id():
 
 def test_run_create_probe_categories_defaults_to_empty_list():
     """RunCreate.probe_categories defaults to []."""
-    from garakboard.schemas import RunCreate
+    from glokta.schemas import RunCreate
 
     run = RunCreate(model_id=uuid4())
     assert run.probe_categories == []
@@ -112,7 +112,7 @@ def test_run_create_probe_categories_defaults_to_empty_list():
 
 def test_run_create_model_id_must_be_uuid():
     """RunCreate raises ValidationError when model_id is not a valid UUID."""
-    from garakboard.schemas import RunCreate
+    from glokta.schemas import RunCreate
 
     with pytest.raises(ValidationError):
         RunCreate(model_id="not-a-uuid")
@@ -120,7 +120,7 @@ def test_run_create_model_id_must_be_uuid():
 
 def test_run_response_from_orm(db_session):
     """RunResponse.model_validate() succeeds on a persisted Run ORM instance."""
-    from garakboard.schemas import RunResponse
+    from glokta.schemas import RunResponse
 
     # First create a Model so Run has a valid foreign key
     model = Model(
@@ -143,7 +143,7 @@ def test_run_response_from_orm(db_session):
 
 def test_run_response_status_is_literal():
     """RunResponse rejects invalid status values at validation time."""
-    from garakboard.schemas import RunResponse
+    from glokta.schemas import RunResponse
 
     # This test validates that status must be one of the Literal values
     # We test by creating a response dict directly
@@ -162,7 +162,7 @@ def test_run_response_status_is_literal():
 
 def test_probe_result_response_from_orm(db_session):
     """ProbeResultResponse.model_validate() succeeds on a persisted ProbeResult."""
-    from garakboard.schemas import ProbeResultResponse
+    from glokta.schemas import ProbeResultResponse
 
     # First create Model and Run
     model = Model(
@@ -197,7 +197,7 @@ def test_probe_result_response_from_orm(db_session):
 
 def test_probe_result_response_score_nullable():
     """ProbeResultResponse.score can be None."""
-    from garakboard.schemas import ProbeResultResponse
+    from glokta.schemas import ProbeResultResponse
 
     # Create response with None score
     response = ProbeResultResponse(
@@ -219,7 +219,7 @@ def test_probe_result_response_score_nullable():
 
 def test_leaderboard_row_pass_rate_computed():
     """LeaderboardRow.pass_rate = total_pass / (total_pass + total_fail)."""
-    from garakboard.schemas import LeaderboardRow
+    from glokta.schemas import LeaderboardRow
 
     row = LeaderboardRow(
         model_id=uuid4(),
@@ -235,7 +235,7 @@ def test_leaderboard_row_pass_rate_computed():
 
 def test_leaderboard_row_pass_rate_zero_when_no_attempts():
     """LeaderboardRow.pass_rate is 0.0 when total_pass and total_fail are both 0."""
-    from garakboard.schemas import LeaderboardRow
+    from glokta.schemas import LeaderboardRow
 
     row = LeaderboardRow(
         model_id=uuid4(),
@@ -251,7 +251,7 @@ def test_leaderboard_row_pass_rate_zero_when_no_attempts():
 
 def test_leaderboard_row_score_is_float():
     """LeaderboardRow.score is a float."""
-    from garakboard.schemas import LeaderboardRow
+    from glokta.schemas import LeaderboardRow
 
     row = LeaderboardRow(
         model_id=uuid4(),
@@ -270,7 +270,7 @@ def test_leaderboard_row_score_is_float():
 
 def test_leaderboard_response_structure():
     """LeaderboardResponse can be instantiated with rows, total, page, page_size, total_pages."""
-    from garakboard.schemas import LeaderboardResponse, LeaderboardRow
+    from glokta.schemas import LeaderboardResponse, LeaderboardRow
 
     response = LeaderboardResponse(
         rows=[],
@@ -285,7 +285,7 @@ def test_leaderboard_response_structure():
 
 def test_leaderboard_response_rows_is_list():
     """LeaderboardResponse.rows is a list of LeaderboardRow."""
-    from garakboard.schemas import LeaderboardResponse, LeaderboardRow
+    from glokta.schemas import LeaderboardResponse, LeaderboardRow
 
     row = LeaderboardRow(
         model_id=uuid4(),
@@ -312,7 +312,7 @@ def test_leaderboard_response_rows_is_list():
 
 def test_probe_result_detail_pass_rate_computed():
     """ProbeResultDetail.pass_rate is correctly calculated."""
-    from garakboard.schemas import ProbeResultDetail
+    from glokta.schemas import ProbeResultDetail
 
     detail = ProbeResultDetail(
         probe_name="test_probe",
@@ -327,7 +327,7 @@ def test_probe_result_detail_pass_rate_computed():
 
 def test_probe_result_detail_score_nullable():
     """ProbeResultDetail.score can be None."""
-    from garakboard.schemas import ProbeResultDetail
+    from glokta.schemas import ProbeResultDetail
 
     detail = ProbeResultDetail(
         probe_name="test_probe",
@@ -345,7 +345,7 @@ def test_probe_result_detail_score_nullable():
 
 def test_model_detail_response_structure():
     """ModelDetailResponse can be instantiated with model_id, model_name, provider, probe_results."""
-    from garakboard.schemas import ModelDetailResponse, ProbeResultDetail
+    from glokta.schemas import ModelDetailResponse, ProbeResultDetail
 
     response = ModelDetailResponse(
         model_id=uuid4(),
@@ -359,7 +359,7 @@ def test_model_detail_response_structure():
 
 def test_model_detail_response_summary_is_optional():
     """ModelDetailResponse.summary can be None."""
-    from garakboard.schemas import ModelDetailResponse
+    from glokta.schemas import ModelDetailResponse
 
     response = ModelDetailResponse(
         model_id=uuid4(),
@@ -375,8 +375,8 @@ def test_model_detail_response_summary_is_optional():
 
 
 def test_all_schemas_importable():
-    """All schemas can be imported from garakboard.schemas."""
-    from garakboard.schemas import (
+    """All schemas can be imported from glokta.schemas."""
+    from glokta.schemas import (
         ModelBase,
         ModelCreate,
         ModelResponse,
@@ -406,7 +406,7 @@ def test_all_schemas_importable():
 
 def test_leaderboard_row_pass_rate_in_dump():
     """LeaderboardRow.pass_rate appears in .model_dump() output (computed_field)."""
-    from garakboard.schemas import LeaderboardRow
+    from glokta.schemas import LeaderboardRow
 
     row = LeaderboardRow(
         model_id=uuid4(),
@@ -424,7 +424,7 @@ def test_leaderboard_row_pass_rate_in_dump():
 
 def test_probe_result_detail_pass_rate_in_dump():
     """ProbeResultDetail.pass_rate appears in .model_dump() output (computed_field)."""
-    from garakboard.schemas import ProbeResultDetail
+    from glokta.schemas import ProbeResultDetail
 
     detail = ProbeResultDetail(
         probe_name="test_probe",

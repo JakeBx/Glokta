@@ -10,7 +10,7 @@ Prints:
   5. Detail for the 10 most recent failures
 
 Usage:
-    PYTHONPATH=src conda run -n garakboard python scripts/diagnose_failed_runs.py
+    PYTHONPATH=src conda run -n glokta python scripts/diagnose_failed_runs.py
 """
 
 import os
@@ -22,8 +22,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sqlalchemy import func
 
-from garakboard.database import SessionLocal
-from garakboard.models import Model, Run
+from glokta.database import SessionLocal
+from glokta.models import Model, Run
 
 STALE_THRESHOLD = timedelta(hours=2, minutes=30)
 

@@ -13,7 +13,7 @@ Actions:
      - Otherwise, rename the Model in place.
 
 Usage:
-    PYTHONPATH=src conda run -n garakboard python scripts/cleanup_bad_runs.py [--dry-run]
+    PYTHONPATH=src conda run -n glokta python scripts/cleanup_bad_runs.py [--dry-run]
 """
 
 import argparse
@@ -23,8 +23,8 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from garakboard.database import SessionLocal
-from garakboard.models import Attempt, Model, ProbeResult, Run
+from glokta.database import SessionLocal
+from glokta.models import Attempt, Model, ProbeResult, Run
 
 
 def reclassify_empty_complete_runs(session, dry_run: bool) -> int:

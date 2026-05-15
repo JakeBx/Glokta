@@ -1,4 +1,4 @@
-name: open-llm-sec
+name: glokta
 channels:
   - conda-forge
   - defaults

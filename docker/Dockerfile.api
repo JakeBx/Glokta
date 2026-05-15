@@ -14,14 +14,14 @@ RUN apt-get update \
 
 # ── Dependency layer (cached until pyproject.toml changes) ───────────
 COPY pyproject.toml ./
-RUN mkdir -p src/garakboard && touch src/garakboard/__init__.py
+RUN mkdir -p src/glokta && touch src/glokta/__init__.py
 RUN uv pip install --system --no-cache ".[dev]"
 
 # ── Application layer ────────────────────────────────────────────────
 COPY src/ ./src/
-RUN uv pip install --system --no-deps --no-cache --reinstall-package garakboard .
+RUN uv pip install --system --no-deps --no-cache --reinstall-package glokta .
 
 ENV PYTHONUNBUFFERED=1
 
 # Default: run the API server
-CMD ["uvicorn", "garakboard.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "glokta.api.app:app", "--host", "0.0.0.0", "--port", "8000"]

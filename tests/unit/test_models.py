@@ -1,4 +1,4 @@
-"""Unit tests for SQLAlchemy models in garakboard.models."""
+"""Unit tests for SQLAlchemy models in glokta.models."""
 
 import uuid
 from datetime import date, datetime
@@ -6,7 +6,7 @@ from datetime import date, datetime
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from garakboard.models import (
+from glokta.models import (
     Model,
     Run,
     ProbeResult,

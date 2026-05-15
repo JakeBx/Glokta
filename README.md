@@ -1,6 +1,6 @@
-# GarakBoard — Open LLM Security Leaderboard
+# Glokta — Open LLM Security Leaderboard
 
-GarakBoard is an automated vulnerability scanning platform that runs [garak](https://github.com/NVIDIA/garak) probes against LLM endpoints and surfaces comparative security results in a leaderboard dashboard. It orchestrates scan jobs via Prefect, persists results in PostgreSQL, and presents everything through a Gradio UI and a REST API.
+Glokta is an automated vulnerability scanning platform that runs [garak](https://github.com/NVIDIA/garak) probes against LLM endpoints and surfaces comparative security results in a leaderboard dashboard. It orchestrates scan jobs via Prefect, persists results in PostgreSQL, and presents everything through a Gradio UI and a REST API.
 
 Built as a project to explore what a reproducible, self-hostable LLM security leaderboard looks like in practice. Scores are raw pass rates from named garak probes — no proprietary weighting, no index. Any result can be reproduced by running the same garak command against the same model.
 
@@ -26,10 +26,10 @@ Built as a project to explore what a reproducible, self-hostable LLM security le
 ### 1. Clone and activate the environment
 
 ```bash
-git clone https://github.com/JakeBx/garak-board.git
+git clone https://github.com/JakeBx/Glokta.git
 cd garak-board
 conda env create -f environment.yml
-conda activate garakboard
+conda activate glokta
 ```
 
 ### 2. Configure environment variables
@@ -44,10 +44,10 @@ cp .env.example .env
 ```bash
 # PostgreSQL 16
 docker run -d \
-  --name garakboard-postgres \
-  -e POSTGRES_DB=garakboard \
-  -e POSTGRES_USER=garakboard \
-  -e POSTGRES_PASSWORD=garakboard \
+  --name glokta-postgres \
+  -e POSTGRES_DB=glokta \
+  -e POSTGRES_USER=glokta \
+  -e POSTGRES_PASSWORD=glokta \
   -p 5432:5432 \
   postgres:16-alpine
 ```
@@ -70,7 +70,7 @@ This inserts 5 OpenRouter free-tier models into your local database. The script 
 ### 5. Start the API server
 
 ```bash
-PYTHONPATH=src uvicorn garakboard.api.app:app --reload
+PYTHONPATH=src uvicorn glokta.api.app:app --reload
 ```
 
 The API is available at **http://localhost:8000** with interactive docs at **http://localhost:8000/docs**.
@@ -80,7 +80,7 @@ The API is available at **http://localhost:8000** with interactive docs at **htt
 ```bash
 make pipeline
 # or manually:
-PYTHONPATH=src conda run -n garakboard python -m garakboard.pipeline.serve
+PYTHONPATH=src conda run -n glokta python -m glokta.pipeline.serve
 ```
 
 The pipeline polls for pending runs every 2 minutes and discovers new models weekly.
@@ -88,8 +88,8 @@ The pipeline polls for pending runs every 2 minutes and discovers new models wee
 ### 7. Start the Gradio dashboard (new terminal)
 
 ```bash
-conda activate garakboard
-PYTHONPATH=src python -m garakboard.frontend.gradio_app
+conda activate glokta
+PYTHONPATH=src python -m glokta.frontend.gradio_app
 ```
 
 Open **http://localhost:7860** to access the dashboard.
@@ -107,16 +107,16 @@ Open **http://localhost:7860** to access the dashboard.
 
 ```bash
 # All tests
-PYTHONPATH=src conda run -n garakboard pytest tests/ -v
+PYTHONPATH=src conda run -n glokta pytest tests/ -v
 
 # Unit tests only
-PYTHONPATH=src conda run -n garakboard pytest tests/unit/ -v
+PYTHONPATH=src conda run -n glokta pytest tests/unit/ -v
 
 # Integration tests only
-PYTHONPATH=src conda run -n garakboard pytest tests/integration/ -v
+PYTHONPATH=src conda run -n glokta pytest tests/integration/ -v
 
 # With coverage
-PYTHONPATH=src conda run -n garakboard pytest tests/ --cov=garakboard --cov-report=term-missing
+PYTHONPATH=src conda run -n glokta pytest tests/ --cov=glokta --cov-report=term-missing
 ```
 
 ## Running the Full Stack (Docker Compose)
@@ -238,7 +238,7 @@ Full interactive documentation at **http://localhost:8000/docs**.
 
 ## HuggingFace Dataset Sync
 
-GarakBoard can export leaderboard results to a HuggingFace dataset and restore them into any database instance.
+Glokta can export leaderboard results to a HuggingFace dataset and restore them into any database instance.
 
 ### Setup
 
@@ -252,9 +252,9 @@ HF_TOKEN=hf_your_write_token_here
 Install the optional dataset dependencies:
 
 ```bash
-pip install "garakboard[dataset]"
+pip install "glokta[dataset]"
 # or with conda
-conda run -n garakboard pip install "datasets>=2.19" "huggingface_hub>=0.23"
+conda run -n glokta pip install "datasets>=2.19" "huggingface_hub>=0.23"
 ```
 
 ### Export to HuggingFace
@@ -308,7 +308,7 @@ open-llm-sec/
 │   ├── trigger_top_models.py   # Manually queue top OpenRouter models
 │   ├── export_to_hf.py         # Export DB → HuggingFace dataset
 │   └── import_from_hf.py       # Import HuggingFace dataset → DB (idempotent merge)
-├── src/garakboard/
+├── src/glokta/
 │   ├── config.py               # Pydantic Settings (env vars)
 │   ├── database.py             # SQLAlchemy engine + SessionLocal, init_db()
 │   ├── models/                 # SQLAlchemy ORM models

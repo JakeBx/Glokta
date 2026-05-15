@@ -6,7 +6,7 @@ from datetime import date
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from garakboard.models import Model, Run, ProbeResult
+from glokta.models import Model, Run, ProbeResult
 
 
 def test_leaderboard_empty(api_client: TestClient):

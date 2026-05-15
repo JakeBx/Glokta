@@ -16,8 +16,8 @@ import pytest
 
 os.environ["TESTING"] = "1"
 
-from garakboard.ingest.jsonl_parser import IngestResult
-from garakboard.models import Model, Run
+from glokta.ingest.jsonl_parser import IngestResult
+from glokta.models import Model, Run
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ def _seed_run(db_session, model: Model, status: str = "pending") -> Run:
 class TestProcessPendingRuns:
     def test_transitions_pending_run_to_complete(self, db_session):
         """A pending run transitions running → complete when scan_fn succeeds."""
-        from garakboard.pipeline.flows import _process_pending_runs
+        from glokta.pipeline.flows import _process_pending_runs
 
         model = _seed_model(db_session, "test/model-proc-1")
         run = _seed_run(db_session, model, "pending")
@@ -62,7 +62,7 @@ class TestProcessPendingRuns:
 
     def test_marks_run_failed_when_scan_raises(self, db_session):
         """A pending run is marked failed when scan_fn raises an exception."""
-        from garakboard.pipeline.flows import _process_pending_runs
+        from glokta.pipeline.flows import _process_pending_runs
 
         model = _seed_model(db_session, "test/model-proc-2")
         run = _seed_run(db_session, model, "pending")
@@ -76,7 +76,7 @@ class TestProcessPendingRuns:
 
     def test_noop_when_no_pending_runs(self, db_session):
         """When no pending runs exist, scan_fn is never called."""
-        from garakboard.pipeline.flows import _process_pending_runs
+        from glokta.pipeline.flows import _process_pending_runs
 
         mock_scan = MagicMock()
         _process_pending_runs(db_session, mock_scan)
@@ -85,7 +85,7 @@ class TestProcessPendingRuns:
 
     def test_does_not_pick_up_running_runs(self, db_session):
         """Runs already in status=running are ignored (SKIP LOCKED semantics)."""
-        from garakboard.pipeline.flows import _process_pending_runs
+        from glokta.pipeline.flows import _process_pending_runs
 
         model = _seed_model(db_session, "test/model-proc-3")
         run = _seed_run(db_session, model, "running")
@@ -99,7 +99,7 @@ class TestProcessPendingRuns:
 
     def test_completed_at_set_on_failure(self, db_session):
         """completed_at is set even when the scan fails."""
-        from garakboard.pipeline.flows import _process_pending_runs
+        from glokta.pipeline.flows import _process_pending_runs
 
         model = _seed_model(db_session, "test/model-proc-4")
         run = _seed_run(db_session, model, "pending")
@@ -117,7 +117,7 @@ class TestProcessPendingRuns:
         db.commit() the FOR UPDATE lock is released.  A second concurrent flow
         would pick up the remaining pending run from under a looping approach.
         """
-        from garakboard.pipeline.flows import _process_pending_runs
+        from glokta.pipeline.flows import _process_pending_runs
 
         model = _seed_model(db_session, "test/model-proc-5")
         run1 = _seed_run(db_session, model, "pending")
@@ -142,7 +142,7 @@ class TestProcessPendingRuns:
 
     def test_scan_fn_called_with_run_id_and_model_name(self, db_session):
         """scan_fn receives (run_id_str, model_name, probe_categories, cap, parallel, timeout)."""
-        from garakboard.pipeline.flows import _process_pending_runs
+        from glokta.pipeline.flows import _process_pending_runs
 
         model = _seed_model(db_session, "test/model-proc-6")
         run = _seed_run(db_session, model, "pending")
@@ -154,7 +154,7 @@ class TestProcessPendingRuns:
 
     def test_scan_fn_passes_per_run_overrides(self, db_session):
         """scan_fn receives per-run probe_prompt_cap, parallel_attempts_override, scan_timeout_seconds."""
-        from garakboard.pipeline.flows import _process_pending_runs
+        from glokta.pipeline.flows import _process_pending_runs
         import json
 
         model = _seed_model(db_session, "test/model-proc-7")
@@ -181,7 +181,7 @@ class TestProcessPendingRuns:
 class TestReapStaleRuns:
     def test_marks_overdue_running_run_as_failed(self, db_session):
         """A running run whose started_at is past the timeout is marked failed."""
-        from garakboard.pipeline.flows import _reap_stale_runs
+        from glokta.pipeline.flows import _reap_stale_runs
 
         model = _seed_model(db_session, "test/model-reap-1")
         run = _seed_run(db_session, model, "running")
@@ -197,7 +197,7 @@ class TestReapStaleRuns:
 
     def test_leaves_recently_started_running_run_alone(self, db_session):
         """A running run within the timeout window is not touched."""
-        from garakboard.pipeline.flows import _reap_stale_runs
+        from glokta.pipeline.flows import _reap_stale_runs
 
         model = _seed_model(db_session, "test/model-reap-2")
         run = _seed_run(db_session, model, "running")
@@ -212,7 +212,7 @@ class TestReapStaleRuns:
 
     def test_ignores_non_running_statuses(self, db_session):
         """pending, complete, and failed runs are never reaped."""
-        from garakboard.pipeline.flows import _reap_stale_runs
+        from glokta.pipeline.flows import _reap_stale_runs
 
         model = _seed_model(db_session, "test/model-reap-3")
         for status in ("pending", "complete", "failed"):
@@ -226,7 +226,7 @@ class TestReapStaleRuns:
 
     def test_leaves_running_run_with_no_started_at_alone(self, db_session):
         """A running run with no started_at is not reaped (never started properly)."""
-        from garakboard.pipeline.flows import _reap_stale_runs
+        from glokta.pipeline.flows import _reap_stale_runs
 
         model = _seed_model(db_session, "test/model-reap-4")
         run = _seed_run(db_session, model, "running")
@@ -248,7 +248,7 @@ class TestReapStaleRuns:
 class TestShouldRetry:
     def test_returns_false_for_empty_ingest_error(self):
         """EmptyIngestError must not be retried — garak produced no output."""
-        from garakboard.pipeline.flows import _should_retry, EmptyIngestError
+        from glokta.pipeline.flows import _should_retry, EmptyIngestError
 
         state = MagicMock()
         state.result.return_value = EmptyIngestError("no results")
@@ -256,7 +256,7 @@ class TestShouldRetry:
 
     def test_returns_false_for_stale_run_error(self):
         """StaleRunError must not be retried — run is no longer in 'running' state."""
-        from garakboard.pipeline.flows import _should_retry, StaleRunError
+        from glokta.pipeline.flows import _should_retry, StaleRunError
 
         state = MagicMock()
         state.result.return_value = StaleRunError("run is failed")
@@ -264,7 +264,7 @@ class TestShouldRetry:
 
     def test_returns_true_for_other_exceptions(self):
         """Transient errors (network, subprocess) should trigger retries."""
-        from garakboard.pipeline.flows import _should_retry
+        from glokta.pipeline.flows import _should_retry
 
         state = MagicMock()
         state.result.return_value = RuntimeError("transient network error")
@@ -279,17 +279,17 @@ class TestShouldRetry:
 class TestExecuteScan:
     def test_calls_build_config_run_garak_and_ingest(self, db_session):
         """_execute_scan calls build_garak_config → run_garak → ingest_jsonl_file."""
-        from garakboard.pipeline.flows import _execute_scan
+        from glokta.pipeline.flows import _execute_scan
 
         model = _seed_model(db_session, "test/model-scan-1")
         run = _seed_run(db_session, model, "running")
 
         ingest_result = IngestResult(probe_results_count=5, attempts_count=25, skipped_count=0)
 
-        with patch("garakboard.pipeline.flows.build_garak_config", return_value={}) as mock_cfg:
-            with patch("garakboard.pipeline.flows.run_garak", return_value="/tmp/out.jsonl") as mock_garak:
-                with patch("garakboard.pipeline.flows.ingest_jsonl_file", return_value=ingest_result) as mock_ingest:
-                    with patch("garakboard.pipeline.flows.compute_remaining_probes", return_value=["encoding.InjectBase64"]):
+        with patch("glokta.pipeline.flows.build_garak_config", return_value={}) as mock_cfg:
+            with patch("glokta.pipeline.flows.run_garak", return_value="/tmp/out.jsonl") as mock_garak:
+                with patch("glokta.pipeline.flows.ingest_jsonl_file", return_value=ingest_result) as mock_ingest:
+                    with patch("glokta.pipeline.flows.compute_remaining_probes", return_value=["encoding.InjectBase64"]):
                         result = _execute_scan(str(run.id), model.name, [], db_session)
 
         mock_cfg.assert_called_once()
@@ -299,29 +299,29 @@ class TestExecuteScan:
 
     def test_raises_empty_ingest_error_on_zero_results(self, db_session):
         """_execute_scan raises EmptyIngestError when garak produces no results."""
-        from garakboard.pipeline.flows import _execute_scan, EmptyIngestError
+        from glokta.pipeline.flows import _execute_scan, EmptyIngestError
 
         model = _seed_model(db_session, "test/model-scan-2")
         run = _seed_run(db_session, model, "running")
 
         empty = IngestResult(probe_results_count=0, attempts_count=0, skipped_count=0)
 
-        with patch("garakboard.pipeline.flows.build_garak_config", return_value={}):
-            with patch("garakboard.pipeline.flows.run_garak", return_value="/tmp/out.jsonl"):
-                with patch("garakboard.pipeline.flows.ingest_jsonl_file", return_value=empty):
-                    with patch("garakboard.pipeline.flows.compute_remaining_probes", return_value=["encoding.InjectBase64"]):
+        with patch("glokta.pipeline.flows.build_garak_config", return_value={}):
+            with patch("glokta.pipeline.flows.run_garak", return_value="/tmp/out.jsonl"):
+                with patch("glokta.pipeline.flows.ingest_jsonl_file", return_value=empty):
+                    with patch("glokta.pipeline.flows.compute_remaining_probes", return_value=["encoding.InjectBase64"]):
                         with pytest.raises(EmptyIngestError):
                             _execute_scan(str(run.id), model.name, [], db_session)
 
     def test_skips_scan_when_all_probes_done(self, db_session):
         """When compute_remaining_probes returns empty, garak is not run."""
-        from garakboard.pipeline.flows import _execute_scan
+        from glokta.pipeline.flows import _execute_scan
 
         model = _seed_model(db_session, "test/model-scan-3")
         run = _seed_run(db_session, model, "running")
 
-        with patch("garakboard.pipeline.flows.compute_remaining_probes", return_value=[]):
-            with patch("garakboard.pipeline.flows.run_garak") as mock_garak:
+        with patch("glokta.pipeline.flows.compute_remaining_probes", return_value=[]):
+            with patch("glokta.pipeline.flows.run_garak") as mock_garak:
                 result = _execute_scan(str(run.id), model.name, [], db_session)
 
         mock_garak.assert_not_called()
@@ -329,17 +329,17 @@ class TestExecuteScan:
 
     def test_returns_probe_and_attempt_counts(self, db_session):
         """Return dict contains probe_results_count and attempts_count."""
-        from garakboard.pipeline.flows import _execute_scan
+        from glokta.pipeline.flows import _execute_scan
 
         model = _seed_model(db_session, "test/model-scan-4")
         run = _seed_run(db_session, model, "running")
 
         ingest_result = IngestResult(probe_results_count=12, attempts_count=60, skipped_count=0)
 
-        with patch("garakboard.pipeline.flows.build_garak_config", return_value={}):
-            with patch("garakboard.pipeline.flows.run_garak", return_value="/tmp/out.jsonl"):
-                with patch("garakboard.pipeline.flows.ingest_jsonl_file", return_value=ingest_result):
-                    with patch("garakboard.pipeline.flows.compute_remaining_probes", return_value=["encoding.InjectBase64"]):
+        with patch("glokta.pipeline.flows.build_garak_config", return_value={}):
+            with patch("glokta.pipeline.flows.run_garak", return_value="/tmp/out.jsonl"):
+                with patch("glokta.pipeline.flows.ingest_jsonl_file", return_value=ingest_result):
+                    with patch("glokta.pipeline.flows.compute_remaining_probes", return_value=["encoding.InjectBase64"]):
                         result = _execute_scan(str(run.id), model.name, [], db_session)
 
         assert result["probe_results_count"] == 12

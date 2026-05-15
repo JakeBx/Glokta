@@ -17,7 +17,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from garakboard.worker.garak_runner import build_garak_config, run_garak
+from glokta.worker.garak_runner import build_garak_config, run_garak
 
 MODEL = "openrouter/google/gemini-2.5-flash-lite"
 PROBES = ["goodside.ThreatenJSON"]
@@ -30,7 +30,7 @@ def main() -> None:
     if not api_key:
         # Fall back to .env if present
         try:
-            from garakboard.config import settings
+            from glokta.config import settings
             api_key = settings.openrouter_api_key
         except Exception:
             pass
@@ -40,7 +40,7 @@ def main() -> None:
         print("Export it or add it to your .env file before running this script.")
         sys.exit(1)
 
-    print(f"GarakBoard smoke test")
+    print(f"Glokta smoke test")
     print(f"  model : {MODEL}")
     print(f"  probes: {PROBES}")
     print(f"  rpm   : {RPM_LIMIT}")

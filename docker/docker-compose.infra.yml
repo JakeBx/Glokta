@@ -1,4 +1,4 @@
-# GarakBoard — infrastructure services only (postgres for local dev)
+# Glokta — infrastructure services only (postgres for local dev)
 # Usage: docker compose --env-file docker/.env -f docker/docker-compose.infra.yml up -d
 
 services:
@@ -7,15 +7,15 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: garakboard
-      POSTGRES_USER: garakboard
+      POSTGRES_DB: glokta
+      POSTGRES_USER: glokta
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in docker/.env (copy from docker/.env.docker)}
     ports:
       - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U garakboard -d garakboard"]
+      test: ["CMD-SHELL", "pg_isready -U glokta -d glokta"]
       interval: 10s
       timeout: 5s
       retries: 5

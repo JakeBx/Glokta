@@ -12,7 +12,7 @@ import pytest
 
 os.environ["TESTING"] = "1"
 
-from garakboard.models import Model, Run
+from glokta.models import Model, Run
 
 
 # ---------------------------------------------------------------------------
@@ -47,9 +47,9 @@ def _completed_run_at(db_session, model: Model, days_ago: int) -> Run:
 
 class TestDiscoverAndQueue:
     def _call(self, db_session, top_models, top_n=10, max_cost=100.0, ttl_days=7):
-        from garakboard.pipeline.flows import _discover_and_queue
+        from glokta.pipeline.flows import _discover_and_queue
 
-        with patch("garakboard.pipeline.flows.fetch_top_models", return_value=top_models):
+        with patch("glokta.pipeline.flows.fetch_top_models", return_value=top_models):
             return _discover_and_queue(
                 db_session,
                 api_key="test-key",
@@ -190,9 +190,9 @@ class TestDiscoverAndQueue:
 
     def test_fetch_top_models_called_with_correct_args(self, db_session):
         """_discover_and_queue passes api_key, top_n, max_scan_cost_usd to fetch_top_models."""
-        from garakboard.pipeline.flows import _discover_and_queue
+        from glokta.pipeline.flows import _discover_and_queue
 
-        with patch("garakboard.pipeline.flows.fetch_top_models", return_value=[]) as mock_fetch:
+        with patch("glokta.pipeline.flows.fetch_top_models", return_value=[]) as mock_fetch:
             _discover_and_queue(
                 db_session,
                 api_key="my-key",

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Import a GarakBoard HuggingFace dataset into the local database (idempotent merge).
+Import a Glokta HuggingFace dataset into the local database (idempotent merge).
 
 Pulls the dataset from HF_DATASET_REPO and performs an idempotent merge:
   - models      matched by primary key id       → skip on conflict, insert on miss
@@ -10,7 +10,7 @@ Pulls the dataset from HF_DATASET_REPO and performs an idempotent merge:
 Import order respects FK dependencies: models → runs → probe_results → attempts.
 
 Usage (conda dev env):
-    PYTHONPATH=src conda run -n garakboard python scripts/import_from_hf.py
+    PYTHONPATH=src conda run -n glokta python scripts/import_from_hf.py
 
 Usage (Docker):
     docker compose -f docker/docker-compose.yml exec api python /app/scripts/import_from_hf.py
@@ -35,9 +35,9 @@ from datetime import datetime, date
 # Allow running from repo root without installing
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from garakboard.config import settings
-from garakboard.database import SessionLocal, init_db, migrate_db
-from garakboard.models import Model, Run, ProbeResult, Attempt
+from glokta.config import settings
+from glokta.database import SessionLocal, init_db, migrate_db
+from glokta.models import Model, Run, ProbeResult, Attempt
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -238,7 +238,7 @@ def dataset_split_to_rows(split) -> list[dict]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Import a GarakBoard HuggingFace dataset into the local DB (idempotent merge)"
+        description="Import a Glokta HuggingFace dataset into the local DB (idempotent merge)"
     )
     parser.add_argument(
         "--dry-run",
@@ -254,7 +254,7 @@ def main():
         print("✗ HF_DATASET_REPO is not set. Add it to your .env file or export it as an environment variable.")
         sys.exit(1)
 
-    print("GarakBoard — Importing HuggingFace dataset into database...")
+    print("Glokta — Importing HuggingFace dataset into database...")
     print(f"  Source repo: {hf_repo}")
     if args.dry_run:
         print("  Mode: dry-run (no DB writes)")

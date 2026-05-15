@@ -1,6 +1,6 @@
 .PHONY: infra services pipeline api frontend seed test
 
-CONDA_ENV = garakboard
+CONDA_ENV = glokta
 COMPOSE    = docker compose --env-file docker/.env -f docker/docker-compose.yml
 INFRA      = docker compose --env-file docker/.env -f docker/docker-compose.infra.yml
 
@@ -15,17 +15,17 @@ services:
 # Run pipeline worker locally against infra (infra must be running)
 pipeline:
 	PYTHONPATH=src conda run -n $(CONDA_ENV) \
-	  python -m garakboard.pipeline.serve
+	  python -m glokta.pipeline.serve
 
 # Run API locally with hot-reload (infra must be running)
 api:
 	PYTHONPATH=src conda run -n $(CONDA_ENV) \
-	  uvicorn garakboard.api.app:app --reload --host 0.0.0.0 --port 8000
+	  uvicorn glokta.api.app:app --reload --host 0.0.0.0 --port 8000
 
 # Run Gradio frontend locally (infra + api must be running)
 frontend:
 	PYTHONPATH=src conda run -n $(CONDA_ENV) \
-	  python -m garakboard.frontend.gradio_app
+	  python -m glokta.frontend.gradio_app
 
 # Seed the model catalog (infra must be running)
 seed:

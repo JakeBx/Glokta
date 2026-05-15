@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Seed the GarakBoard database with OpenRouter free-tier models and probe run queue entries.
+Seed the Glokta database with OpenRouter free-tier models and probe run queue entries.
 
 Usage (conda dev env):
-    PYTHONPATH=src conda run -n garakboard python scripts/seed_models.py
+    PYTHONPATH=src conda run -n glokta python scripts/seed_models.py
 
 Usage (Docker):
     docker compose -f docker/docker-compose.yml exec api python /app/scripts/seed_models.py
@@ -23,8 +23,8 @@ from datetime import date
 # Allow running from repo root without installing
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from garakboard.database import SessionLocal, init_db
-from garakboard.models import Model, ProbeRunQueue, Run
+from glokta.database import SessionLocal, init_db
+from glokta.models import Model, ProbeRunQueue, Run
 
 # Current OpenRouter free-tier model catalogue (verified April 2026)
 # Format: (name, provider, version)
@@ -179,12 +179,12 @@ def queue_pending_runs(session) -> int:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Seed GarakBoard models and probe queue")
+    parser = argparse.ArgumentParser(description="Seed Glokta models and probe queue")
     parser.add_argument("--queue", action="store_true",
                         help="Also create pending Run records for queued probe entries (pipeline picks them up automatically)")
     args = parser.parse_args()
 
-    print("GarakBoard — Seeding OpenRouter free-tier models...")
+    print("Glokta — Seeding OpenRouter free-tier models...")
     init_db()
     session = SessionLocal()
     try:
@@ -194,7 +194,7 @@ def main():
         print(f"Total in catalogue: {len(TEST_MODELS)} models")
 
         print()
-        print("GarakBoard — Seeding probe run queue...")
+        print("Glokta — Seeding probe run queue...")
         queued, probe_skipped = seed_probe_queue(session)
         model_count = len(TEST_MODELS)
         total = len(PROBE_CATEGORIES) * model_count

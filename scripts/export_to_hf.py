@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Export the GarakBoard database to a HuggingFace dataset.
+Export the Glokta database to a HuggingFace dataset.
 
 Exports four tables — models, runs, probe_results, attempts — as a multi-split DatasetDict
 and pushes it to the HuggingFace Hub repository defined by HF_DATASET_REPO.
 
 Usage (conda dev env):
-    PYTHONPATH=src conda run -n garakboard python scripts/export_to_hf.py
+    PYTHONPATH=src conda run -n glokta python scripts/export_to_hf.py
 
 Usage (Docker):
     docker compose -f docker/docker-compose.yml exec api python /app/scripts/export_to_hf.py
@@ -29,9 +29,9 @@ import argparse
 # Allow running from repo root without installing
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from garakboard.config import settings
-from garakboard.database import SessionLocal, init_db, migrate_db
-from garakboard.models import Model, Run, ProbeResult, Attempt
+from glokta.config import settings
+from glokta.database import SessionLocal, init_db, migrate_db
+from glokta.models import Model, Run, ProbeResult, Attempt
 
 
 def _date_to_str(value) -> str | None:
@@ -132,7 +132,7 @@ def rows_to_dataset(rows: list[dict]):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Export GarakBoard DB to a HuggingFace dataset"
+        description="Export Glokta DB to a HuggingFace dataset"
     )
     parser.add_argument(
         "--dry-run",
@@ -152,7 +152,7 @@ def main():
             print("✗ HF_TOKEN is not set. Add it to your .env file or export it as an environment variable.")
             sys.exit(1)
 
-    print("GarakBoard — Exporting database to HuggingFace dataset...")
+    print("Glokta — Exporting database to HuggingFace dataset...")
     if not args.dry_run:
         print(f"  Target repo: {hf_repo}")
     print()

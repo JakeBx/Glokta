@@ -11,11 +11,11 @@ done
 echo "Prefect Server is up."
 
 # Create work pool (idempotent — ignores error if it already exists)
-prefect work-pool create --type process garakboard-process-pool 2>/dev/null || true
+prefect work-pool create --type process glokta-process-pool 2>/dev/null || true
 
 # Deploy both flows from prefect.yaml
 cd /app
 prefect deploy --all --prefect-file /app/prefect.yaml
 
 echo "Flows deployed. Starting worker..."
-exec prefect worker start --pool garakboard-process-pool
+exec prefect worker start --pool glokta-process-pool

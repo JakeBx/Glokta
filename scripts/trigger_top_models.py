@@ -3,7 +3,7 @@
 Manually trigger scan runs for the top OpenRouter models under a USD cost cap.
 
 Usage (conda dev env):
-    PYTHONPATH=src conda run -n garakboard python scripts/trigger_top_models.py
+    PYTHONPATH=src conda run -n glokta python scripts/trigger_top_models.py
 
 Usage (Docker):
     docker compose -f docker/docker-compose.yml exec api python /app/scripts/trigger_top_models.py
@@ -24,11 +24,11 @@ from datetime import date
 # Allow running from repo root without installing
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from garakboard.config import settings
-from garakboard.database import SessionLocal, init_db
-from garakboard.models import Model, Run
-from garakboard.worker.garak_runner import DEFAULT_PROBE_CATEGORIES
-from garakboard.worker.openrouter_client import estimate_scan_cost_usd, fetch_top_models
+from glokta.config import settings
+from glokta.database import SessionLocal, init_db
+from glokta.models import Model, Run
+from glokta.worker.garak_runner import DEFAULT_PROBE_CATEGORIES
+from glokta.worker.openrouter_client import estimate_scan_cost_usd, fetch_top_models
 
 
 def _openrouter_name(model_id: str) -> str:
