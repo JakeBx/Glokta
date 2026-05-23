@@ -17,14 +17,14 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from garakboard.data.filters import SFTRecord, apply_quality_filters
+from glokta.data.filters import SFTRecord, apply_quality_filters
 
 
 def _load_garak_records(triggered_by: str) -> list[SFTRecord]:
-    from garakboard.database import SessionLocal, init_db
-    from garakboard.models import Run
-    from garakboard.models.attempt import Attempt
-    from garakboard.models.model import Model
+    from glokta.database import SessionLocal, init_db
+    from glokta.models import Run
+    from glokta.models.attempt import Attempt
+    from glokta.models.model import Model
 
     init_db()
     db = SessionLocal()

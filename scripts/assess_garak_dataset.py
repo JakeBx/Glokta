@@ -61,10 +61,10 @@ def _is_hit(detector_outcome: dict | None) -> bool:
 
 
 def _run_assessment(triggered_by: str, min_hits: int) -> int:
-    from garakboard.database import SessionLocal, init_db
-    from garakboard.models import Run
-    from garakboard.models.attempt import Attempt
-    from garakboard.models.model import Model
+    from glokta.database import SessionLocal, init_db
+    from glokta.models import Run
+    from glokta.models.attempt import Attempt
+    from glokta.models.model import Model
 
     init_db()
     db = SessionLocal()

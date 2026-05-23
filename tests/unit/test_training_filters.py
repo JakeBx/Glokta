@@ -1,8 +1,8 @@
-"""Unit tests for garakboard.data.filters — TDD red-green."""
+"""Unit tests for glokta.data.filters — TDD red-green."""
 
 import pytest
 
-from garakboard.data.filters import SFTRecord, apply_quality_filters
+from glokta.data.filters import SFTRecord, apply_quality_filters
 
 
 def _make_record(**kwargs) -> SFTRecord:
