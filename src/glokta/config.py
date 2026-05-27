@@ -45,9 +45,11 @@ class Settings(BaseSettings):
     openrouter_rankings_url: str = "https://openrouter.ai/rankings"
     openrouter_catalog_url: str = "https://openrouter.ai/api/v1/models"
 
-    # HuggingFace Dataset sync — optional, only needed for export/import scripts
+    # HuggingFace — token shared for dataset sync and inference provider scanning
     hf_dataset_repo: str = ""  # e.g. "your-username/open-llm-sec-leaderboard"
-    hf_token: str = ""         # HuggingFace API token (write for export, read for private import)
+    hf_token: str = ""         # HuggingFace API token (write for export, read for import/inference)
+    scheduler_hf_top_n_models: int = 10
+    hf_rpm_limit: int = 10     # HF serverless inference has stricter rate limits than OpenRouter
 
     @field_validator("database_url")
     @classmethod
