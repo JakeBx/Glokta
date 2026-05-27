@@ -72,8 +72,11 @@ def compute_remaining_probes(done: set[str], probe_categories: list[str]) -> lis
     return result
 
 
-_GENERATOR_NAME = "openrouter-direct"
+_OPENROUTER_GENERATOR_NAME = "openrouter-direct"
+_HF_GENERATOR_NAME = "hf-inference-direct"
 _OPENROUTER_URI = "https://openrouter.ai/api/v1/chat/completions"
+# HF Inference Providers router — model identified via the "model" field in the request body
+_HF_URI = "https://router.huggingface.co/v1/chat/completions"
 
 
 def build_garak_config(
@@ -89,7 +92,9 @@ def build_garak_config(
     Build a garak configuration dict suitable for writing as YAML.
 
     Args:
-        model_name: OpenRouter model name e.g. 'openrouter/meta-llama/llama-3-8b-instruct:free'
+        model_name: Model name with provider prefix, e.g.
+            'openrouter/meta-llama/llama-3-8b-instruct:free' or
+            'huggingface/meta-llama/Llama-3.1-8B-Instruct'
         probe_categories: List of probe category names e.g. ['encoding', 'malwaregen']
         output_dir: Directory where garak should write its JSONL output
         parallel_attempts: Number of parallel attempts (default 1)
@@ -101,8 +106,27 @@ def build_garak_config(
     """
     probes = probe_categories if probe_categories else DEFAULT_PROBE_CATEGORIES
     spec = probe_spec_override if probe_spec_override is not None else ",".join(probes)
-    # tasks.py always prepends "openrouter/"; REST config needs the raw model ID
-    raw_model = model_name.removeprefix("openrouter/")
+
+    if model_name.startswith("huggingface/"):
+        raw_model = model_name.removeprefix("huggingface/")
+        generator_name = _HF_GENERATOR_NAME
+        uri = _HF_URI
+        key_env_var = "HF_TOKEN"
+        req_body: dict = {
+            "model": raw_model,
+            "messages": [{"role": "user", "content": "$INPUT"}],
+            "stream": False,
+        }
+    else:
+        raw_model = model_name.removeprefix("openrouter/")
+        generator_name = _OPENROUTER_GENERATOR_NAME
+        uri = _OPENROUTER_URI
+        key_env_var = "OPENROUTER_API_KEY"
+        req_body = {
+            "model": raw_model,
+            "messages": [{"role": "user", "content": "$INPUT"}],
+            "stream": False,
+        }
 
     config: dict = {
         "system": {
@@ -110,24 +134,20 @@ def build_garak_config(
         },
         "plugins": {
             "target_type": "rest",
-            "target_name": _GENERATOR_NAME,
+            "target_name": generator_name,
             "probe_spec": spec,
             "generators": {
                 "rest": {
                     "RestGenerator": {
-                        "name": _GENERATOR_NAME,
-                        "uri": _OPENROUTER_URI,
+                        "name": generator_name,
+                        "uri": uri,
                         "method": "post",
                         "headers": {
                             "Content-Type": "application/json",
                             "Authorization": "Bearer $KEY",
                         },
-                        "key_env_var": "OPENROUTER_API_KEY",
-                        "req_template_json_object": {
-                            "model": raw_model,
-                            "messages": [{"role": "user", "content": "$INPUT"}],
-                            "stream": False,
-                        },
+                        "key_env_var": key_env_var,
+                        "req_template_json_object": req_body,
                         "response_json": True,
                         "response_json_field": "$.choices[0].message.content",
                         "request_timeout": 60,
@@ -156,7 +176,7 @@ def build_garak_config(
 
 def run_garak(
     config: dict,
-    api_key: str,
+    env_overrides: dict[str, str],
     timeout: int = GARAK_TIMEOUT_SECONDS,
     pf_logger: logging.Logger | None = None,
 ) -> str:
@@ -165,7 +185,8 @@ def run_garak(
 
     Args:
         config: garak config dict from build_garak_config()
-        api_key: OpenRouter API key
+        env_overrides: Environment variables to inject (e.g. {"OPENROUTER_API_KEY": "..."}
+            for OpenRouter or {"HF_TOKEN": "..."} for HuggingFace).
 
     Returns:
         Path to the garak JSONL output file
@@ -186,7 +207,7 @@ def run_garak(
     _log = pf_logger or logger
     try:
         env = os.environ.copy()
-        env["OPENROUTER_API_KEY"] = api_key
+        env.update(env_overrides)
 
         proc = subprocess.Popen(
             ["garak", "--config", config_path],

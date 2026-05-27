@@ -24,6 +24,7 @@ dependencies = [
 pipeline = [
     "prefect==3.7.0",
     "garak>=0.9",
+    "huggingface_hub>=0.23",
 ]
 dev = [
     "pytest>=8.2",

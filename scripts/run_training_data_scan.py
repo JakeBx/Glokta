@@ -7,6 +7,7 @@ Creates two Run records per target model:
 
 Usage:
     PYTHONPATH=src python scripts/run_training_data_scan.py [--model MODEL_ID] [--dry-run] [--overwrite]
+    PYTHONPATH=src python scripts/run_training_data_scan.py --provider hf [--top-n 5] [--dry-run]
 
 Run in priority order per data-requirements.md:
     python scripts/run_training_data_scan.py --model x-ai/grok-3-mini
@@ -22,6 +23,7 @@ from datetime import date
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+from glokta.config import settings
 from glokta.database import SessionLocal, init_db
 from glokta.models import Model, Run
 from glokta.worker.garak_runner import TRAINING_PROBE_CATEGORIES
@@ -45,6 +47,10 @@ _SCAN_TIMEOUT = 14400*3  # 12 hours
 
 def _openrouter_name(model_id: str) -> str:
     return model_id if model_id.startswith("openrouter/") else f"openrouter/{model_id}"
+
+
+def _hf_name(model_id: str) -> str:
+    return model_id if model_id.startswith("huggingface/") else f"huggingface/{model_id}"
 
 
 def _upsert_model(session, model_name: str) -> Model:
@@ -124,20 +130,46 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--model",
-        help="Queue one specific model ID (without openrouter/ prefix). Defaults to all 4 priority models.",
+        help="Queue one specific model ID. For OpenRouter omit the prefix; for HF use --provider hf.",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=["openrouter", "hf"],
+        default="openrouter",
+        help="Provider to target. 'hf' auto-discovers top warm inference models from HuggingFace.",
+    )
+    parser.add_argument(
+        "--top-n",
+        type=int,
+        default=5,
+        help="Number of HF models to auto-discover when --provider hf is used (default: 5).",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print what would be queued without creating DB rows")
     parser.add_argument("--overwrite", action="store_true", help="Re-queue even if a training run already exists")
     args = parser.parse_args()
 
-    models = [args.model] if args.model else TARGET_MODELS
+    if args.provider == "hf":
+        from glokta.worker.hf_client import fetch_top_hf_models
+        if not settings.hf_token:
+            print("ERROR: HF_TOKEN is not set. Set it in .env or as an environment variable.")
+            return 1
+        if args.model:
+            raw_ids = [args.model]
+        else:
+            print(f"Discovering top {args.top_n} HuggingFace warm inference models...")
+            discovered = fetch_top_hf_models(hf_token=settings.hf_token, top_n=args.top_n)
+            raw_ids = [m["id"] for m in discovered]
+            print(f"Found: {raw_ids}")
+        model_names = [_hf_name(rid) for rid in raw_ids]
+    else:
+        raw_ids = [args.model] if args.model else TARGET_MODELS
+        model_names = [_openrouter_name(rid) for rid in raw_ids]
 
     init_db()
     session = SessionLocal()
     total_queued = 0
     try:
-        for raw_id in models:
-            model_name = _openrouter_name(raw_id)
+        for model_name in model_names:
             print(f"\n{model_name}:")
             total_queued += queue_model(session, model_name, args.dry_run, args.overwrite)
     finally:

@@ -344,3 +344,39 @@ class TestExecuteScan:
 
         assert result["probe_results_count"] == 12
         assert result["attempts_count"] == 60
+
+    def test_execute_scan_uses_hf_env_overrides_for_hf_model(self, db_session):
+        """_execute_scan passes HF_TOKEN env_override when model is huggingface/ prefixed."""
+        from glokta.pipeline.flows import _execute_scan
+
+        model = _seed_model(db_session, "huggingface/meta-llama/Llama-3.1-8B-Instruct")
+        run = _seed_run(db_session, model, "running")
+        ingest_result = IngestResult(probe_results_count=3, attempts_count=15, skipped_count=0)
+
+        with patch("glokta.pipeline.flows.build_garak_config", return_value={}):
+            with patch("glokta.pipeline.flows.run_garak", return_value="/tmp/out.jsonl") as mock_garak:
+                with patch("glokta.pipeline.flows.ingest_jsonl_file", return_value=ingest_result):
+                    with patch("glokta.pipeline.flows.compute_remaining_probes", return_value=["dan.Dan_11_0"]):
+                        _execute_scan(str(run.id), model.name, [], db_session)
+
+        env_overrides = mock_garak.call_args.args[1]
+        assert "HF_TOKEN" in env_overrides
+        assert "OPENROUTER_API_KEY" not in env_overrides
+
+    def test_execute_scan_uses_openrouter_env_overrides_for_openrouter_model(self, db_session):
+        """_execute_scan passes OPENROUTER_API_KEY when model is openrouter/ prefixed."""
+        from glokta.pipeline.flows import _execute_scan
+
+        model = _seed_model(db_session, "openrouter/meta-llama/llama-3-8b-instruct:free")
+        run = _seed_run(db_session, model, "running")
+        ingest_result = IngestResult(probe_results_count=3, attempts_count=15, skipped_count=0)
+
+        with patch("glokta.pipeline.flows.build_garak_config", return_value={}):
+            with patch("glokta.pipeline.flows.run_garak", return_value="/tmp/out.jsonl") as mock_garak:
+                with patch("glokta.pipeline.flows.ingest_jsonl_file", return_value=ingest_result):
+                    with patch("glokta.pipeline.flows.compute_remaining_probes", return_value=["dan.Dan_11_0"]):
+                        _execute_scan(str(run.id), model.name, [], db_session)
+
+        env_overrides = mock_garak.call_args.args[1]
+        assert "OPENROUTER_API_KEY" in env_overrides
+        assert "HF_TOKEN" not in env_overrides

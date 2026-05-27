@@ -32,6 +32,7 @@ from glokta.worker.garak_runner import (
     compute_remaining_probes,
     run_garak,
 )
+from glokta.worker.hf_client import fetch_top_hf_models
 from glokta.worker.openrouter_client import fetch_top_models
 
 logger = logging.getLogger(__name__)
@@ -151,20 +152,27 @@ def _execute_scan(
         logger.info(f"Run {run_id}: all probes already complete, skipping scan")
         return {"probe_results_count": len(done_probes), "skipped": True}
 
+    if model_name.startswith("huggingface/"):
+        rpm_limit = settings.hf_rpm_limit
+        env_overrides = {"HF_TOKEN": settings.hf_token}
+    else:
+        rpm_limit = settings.openrouter_rpm_limit
+        env_overrides = {"OPENROUTER_API_KEY": settings.openrouter_api_key}
+
     with tempfile.TemporaryDirectory() as output_dir:
         config = build_garak_config(
             model_name=model_name,
             probe_categories=probe_categories,
             output_dir=output_dir,
             parallel_attempts=parallel_attempts_override or settings.garak_parallel_attempts,
-            rpm_limit=settings.openrouter_rpm_limit,
+            rpm_limit=rpm_limit,
             soft_probe_prompt_cap=probe_prompt_cap or settings.garak_soft_probe_prompt_cap,
             probe_spec_override=",".join(remaining),
         )
 
         jsonl_path = run_garak(
             config,
-            settings.openrouter_api_key,
+            env_overrides,
             timeout=scan_timeout_seconds or settings.garak_timeout_seconds,
         )
 
@@ -201,51 +209,40 @@ def _execute_scan(
     }
 
 
-def _discover_and_queue(
+def _queue_models_from_source(
     db: Session,
-    api_key: str,
-    top_n: int,
-    max_scan_cost_usd: float,
-    scan_ttl_days: int,
-) -> dict:
-    """Fetch top models from OpenRouter and create pending runs for stale ones.
+    model_dicts: list[dict],
+    prefix: str,
+    staleness_cutoff: datetime,
+) -> tuple[int, int]:
+    """Create pending runs for stale models from a single discovery source.
 
-    Returns dict with queued and skipped counts.
+    Returns (queued_count, skipped_count).
     """
     from datetime import date
 
-    top_models = fetch_top_models(
-        api_key=api_key,
-        top_n=top_n,
-        max_scan_cost_usd=max_scan_cost_usd,
-    )
-
-    staleness_cutoff = datetime.now(timezone.utc) - timedelta(days=scan_ttl_days)
     queued = 0
     skipped = 0
 
-    for model_data in top_models:
-        openrouter_id = model_data.get("id", "")
-        if not openrouter_id:
+    for model_data in model_dicts:
+        raw_id = model_data.get("id", "")
+        if not raw_id:
             continue
 
-        model_name = (
-            openrouter_id
-            if openrouter_id.startswith("openrouter/")
-            else f"openrouter/{openrouter_id}"
-        )
+        model_name = raw_id if raw_id.startswith(prefix) else f"{prefix}{raw_id}"
 
         model = db.query(Model).filter(Model.name == model_name).first()
         if model is None:
+            parts = model_name.split("/")
+            provider = parts[1] if len(parts) > 1 else model_name
             model = Model(
                 name=model_name,
-                provider=model_name.split("/")[1] if "/" in model_name else model_name,
+                provider=provider,
                 snapshot_date=date.today(),
             )
             db.add(model)
             db.flush()
 
-        # Skip if already pending or running
         active = (
             db.query(Run)
             .filter(Run.model_id == model.id, Run.status.in_(["pending", "running"]))
@@ -255,7 +252,6 @@ def _discover_and_queue(
             skipped += 1
             continue
 
-        # Skip if recently completed within TTL
         latest = (
             db.query(Run)
             .filter(Run.model_id == model.id, Run.status == "complete")
@@ -275,8 +271,44 @@ def _discover_and_queue(
         db.commit()
         queued += 1
 
-    logger.info(f"discover_and_queue: queued={queued}, skipped={skipped}")
-    return {"queued": queued, "skipped": skipped}
+    return queued, skipped
+
+
+def _discover_and_queue(
+    db: Session,
+    api_key: str,
+    top_n: int,
+    max_scan_cost_usd: float,
+    scan_ttl_days: int,
+    hf_token: str = "",
+    hf_top_n: int = 0,
+) -> dict:
+    """Fetch top models from OpenRouter (and optionally HuggingFace) and create
+    pending runs for stale ones.
+
+    Returns dict with queued and skipped counts.
+    """
+    staleness_cutoff = datetime.now(timezone.utc) - timedelta(days=scan_ttl_days)
+    total_queued = 0
+    total_skipped = 0
+
+    or_models = fetch_top_models(
+        api_key=api_key,
+        top_n=top_n,
+        max_scan_cost_usd=max_scan_cost_usd,
+    )
+    q, s = _queue_models_from_source(db, or_models, "openrouter/", staleness_cutoff)
+    total_queued += q
+    total_skipped += s
+
+    if hf_token and hf_top_n > 0:
+        hf_models = fetch_top_hf_models(hf_token=hf_token, top_n=hf_top_n)
+        q, s = _queue_models_from_source(db, hf_models, "huggingface/", staleness_cutoff)
+        total_queued += q
+        total_skipped += s
+
+    logger.info("discover_and_queue: queued=%d, skipped=%d", total_queued, total_skipped)
+    return {"queued": total_queued, "skipped": total_skipped}
 
 
 # ---------------------------------------------------------------------------
@@ -362,7 +394,7 @@ def scan_pending_runs() -> None:
 
 @flow(name="discover-and-queue-scans", log_prints=True)
 def discover_and_queue_scans() -> None:
-    """Fetch top-N models from OpenRouter and queue stale ones. Scheduled weekly."""
+    """Fetch top-N models from OpenRouter and HuggingFace and queue stale ones. Scheduled weekly."""
     if not settings.scheduler_enabled:
         return
     db = SessionLocal()
@@ -373,6 +405,8 @@ def discover_and_queue_scans() -> None:
             top_n=settings.scheduler_top_n_models,
             max_scan_cost_usd=settings.scheduler_max_scan_cost_usd,
             scan_ttl_days=settings.scheduler_scan_ttl_days,
+            hf_token=settings.hf_token,
+            hf_top_n=settings.scheduler_hf_top_n_models,
         )
     except Exception as exc:
         logger.error(f"discover_and_queue_scans failed: {exc}")
