@@ -1,13 +1,12 @@
 """
 Glokta Gradio Dashboard — read-only security leaderboard UI.
 
-Six tabs:
-  1. Risk Leaderboard — risk-weighted pass rates with per-category checkboxes
+Five tabs:
+  1. Risk Leaderboard — risk-weighted pass rates; click a row to drill into Probe Results
   2. Probe Results   — raw probe-level data (original leaderboard view)
-  3. Trends          — per-risk score evolution for a model over time
-  4. Compare         — overall pass rate across multiple models over time
-  5. Run Status      — per-model scan status
-  6. Run Detail      — per-run probe results and raw JSONL output
+  3. Compare         — overall pass rate across multiple models over time
+  4. Run Status      — per-model scan status
+  5. Run Detail      — per-run probe results and raw JSONL output
 """
 
 import json
@@ -104,10 +103,8 @@ def fetch_leaderboard(probe_category: str, model_id: str) -> pd.DataFrame:
 
 
 def fetch_risk_leaderboard(included_risks: list[str]) -> pd.DataFrame:
-    """Fetch risk-based leaderboard with per-category and overall pass rates."""
-    risk_cols = [k for k in ACTIVE_RISKS if k in included_risks]
-    base_cols = ["Model", "Provider", "Overall Pass Rate"] + risk_cols
-    empty = pd.DataFrame(columns=base_cols)
+    """Fetch risk-based leaderboard — Model, Provider, Overall Pass Rate only."""
+    empty = pd.DataFrame(columns=["Model", "Provider", "Overall Pass Rate"])
 
     if not included_risks:
         return empty
@@ -117,18 +114,14 @@ def fetch_risk_leaderboard(included_risks: list[str]) -> pd.DataFrame:
     if not data or not data.get("models"):
         return empty
 
-    rows = []
-    for m in data["models"]:
-        row: dict = {
+    rows = [
+        {
             "Model": m["model_name"],
             "Provider": m["provider"],
             "Overall Pass Rate": f"{m['overall_pass_rate']:.1%}" if m["overall_pass_rate"] is not None else "N/A",
         }
-        for risk in risk_cols:
-            rate = m["per_risk"].get(risk)
-            row[risk] = f"{rate:.1%}" if rate is not None else "—"
-        rows.append(row)
-
+        for m in data["models"]
+    ]
     return pd.DataFrame(rows) if rows else empty
 
 
@@ -230,50 +223,6 @@ def _empty_fig(message: str) -> go.Figure:
     return fig
 
 
-def make_trends_plot(model_id: str, model_name: str, included_risks: list[str]) -> go.Figure:
-    """Line chart: one series per risk category for a single model over time."""
-    result = fetch_trends_for_model(model_id, included_risks)
-    if not result:
-        return _empty_fig("No scan history for this model.")
-    points, _ = result
-
-    if not points:
-        return _empty_fig("No completed scans found.")
-
-    dates = [p["completed_at"] for p in points]
-    fig = go.Figure()
-
-    for risk in included_risks:
-        y_vals = [p["per_risk"].get(risk) for p in points]
-        if any(v is not None for v in y_vals):
-            label = RISK_DEFINITIONS[risk]["label"] if risk in RISK_DEFINITIONS else risk
-            fig.add_trace(go.Scatter(
-                x=dates, y=y_vals,
-                mode="lines+markers",
-                name=label,
-                connectgaps=True,
-            ))
-
-    # Also add overall pass rate line
-    overall = [p.get("overall_pass_rate") for p in points]
-    if any(v is not None for v in overall):
-        fig.add_trace(go.Scatter(
-            x=dates, y=overall,
-            mode="lines+markers",
-            name="Overall",
-            line=dict(width=3, dash="dash"),
-        ))
-
-    fig.update_layout(
-        title=f"Risk Trends — {model_name}",
-        xaxis_title="Scan Date",
-        yaxis=dict(title="Pass Rate", range=[0, 1], tickformat=".0%"),
-        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5),
-        margin=dict(b=120),
-    )
-    return fig
-
-
 def make_compare_plot(
     model_entries: list[tuple[str, str]],
     included_risks: list[str],
@@ -330,16 +279,18 @@ def build_app() -> gr.Blocks:
 
         # Shared state
         current_run_id = gr.State(value=None)
+        # Maps model display name → model UUID for row-click navigation
+        model_name_to_id = gr.State(value={})
 
-        with gr.Tabs():
+        with gr.Tabs() as tabs:
 
             # ----------------------------------------------------------------
             # Tab 1: Risk Leaderboard
             # ----------------------------------------------------------------
-            with gr.Tab("Risk Leaderboard"):
+            with gr.Tab("Risk Leaderboard", id="risk_leaderboard"):
                 gr.Markdown(
                     "Overall pass rate = mean of per-risk pass rates for selected risks. "
-                    "Sorted safest-first."
+                    "Sorted safest-first. **Click a row to drill into probe results.**"
                 )
                 with gr.Row():
                     risk_filter = gr.CheckboxGroup(
@@ -352,7 +303,6 @@ def build_app() -> gr.Blocks:
 
                 gr.Markdown(
                     "_fileformats (RCE via Model Artifacts) is excluded — silently fails with REST generators; no scan data._",
-                    elem_classes=["gr-small"],
                 )
 
                 risk_table = gr.Dataframe(
@@ -362,9 +312,9 @@ def build_app() -> gr.Blocks:
                 )
 
             # ----------------------------------------------------------------
-            # Tab 2: Probe Results (original leaderboard view)
+            # Tab 2: Probe Results
             # ----------------------------------------------------------------
-            with gr.Tab("Probe Results"):
+            with gr.Tab("Probe Results", id="probe_results") as probe_tab:
                 with gr.Row():
                     category_filter = gr.Dropdown(
                         label="Probe Category",
@@ -409,35 +359,9 @@ def build_app() -> gr.Blocks:
                 )
 
             # ----------------------------------------------------------------
-            # Tab 3: Trends
+            # Tab 3: Compare
             # ----------------------------------------------------------------
-            with gr.Tab("Trends"):
-                gr.Markdown(
-                    "Per-risk pass rate evolution for a model over time. "
-                    "Select a model and toggle risk categories to include."
-                )
-                with gr.Row():
-                    trends_model = gr.Dropdown(
-                        label="Model",
-                        choices=[],
-                        value=None,
-                        interactive=True,
-                        scale=4,
-                    )
-                    trends_refresh_btn = gr.Button("Refresh", scale=1, variant="secondary")
-
-                trends_risk_filter = gr.CheckboxGroup(
-                    label="Risk Categories",
-                    choices=_RISK_CHECKBOX_CHOICES,
-                    value=_RISK_CHECKBOX_DEFAULT,
-                )
-
-                trends_plot = gr.Plot(label="Risk Trends")
-
-            # ----------------------------------------------------------------
-            # Tab 4: Compare
-            # ----------------------------------------------------------------
-            with gr.Tab("Compare"):
+            with gr.Tab("Compare", id="compare"):
                 gr.Markdown(
                     "Overall pass rate across multiple models over time. "
                     "Risk filter affects the overall pass rate calculation."
@@ -462,9 +386,9 @@ def build_app() -> gr.Blocks:
                 compare_plot = gr.Plot(label="Model Comparison")
 
             # ----------------------------------------------------------------
-            # Tab 5: Run Status
+            # Tab 4: Run Status
             # ----------------------------------------------------------------
-            with gr.Tab("Run Status"):
+            with gr.Tab("Run Status", id="run_status"):
                 gr.Markdown("Per-model scan status. Refreshes automatically every 30 seconds.")
 
                 run_summary_table = gr.Dataframe(
@@ -477,9 +401,9 @@ def build_app() -> gr.Blocks:
                 run_timer = gr.Timer(value=30, active=True)
 
             # ----------------------------------------------------------------
-            # Tab 6: Run Detail
+            # Tab 5: Run Detail
             # ----------------------------------------------------------------
-            with gr.Tab("Run Detail"):
+            with gr.Tab("Run Detail", id="run_detail"):
                 gr.Markdown("Select a run to inspect its probe results and raw garak JSONL output.")
                 with gr.Row():
                     status_filter = gr.Dropdown(
@@ -532,7 +456,7 @@ def build_app() -> gr.Blocks:
             categories = fetch_probe_categories()
             models = fetch_models()
             model_choices_with_all = [("All", "")] + models
-            model_choices = models  # without "All" for trends/compare
+            name_to_id = {name: mid for name, mid in models}
             leaderboard_df = fetch_leaderboard("All", "")
             risk_df = fetch_risk_leaderboard(_RISK_CHECKBOX_DEFAULT)
             summary_df = fetch_run_summary()
@@ -542,8 +466,8 @@ def build_app() -> gr.Blocks:
                 gr.update(choices=model_choices_with_all, value=""),  # model_filter
                 leaderboard_df,                                        # leaderboard_table
                 risk_df,                                               # risk_table
-                gr.update(choices=model_choices, value=None),         # trends_model
-                gr.update(choices=model_choices, value=[]),           # compare_models
+                name_to_id,                                            # model_name_to_id
+                gr.update(choices=models, value=[]),                  # compare_models
                 summary_df,                                            # run_summary_table
                 runs_df,                                               # runs_table
             )
@@ -568,17 +492,29 @@ def build_app() -> gr.Blocks:
         def on_risk_filter_change(included_risks: list[str]):
             return fetch_risk_leaderboard(included_risks)
 
-        def on_trends_update(model_id: str | None, included_risks: list[str]):
-            if not model_id or not included_risks:
-                return _empty_fig("Select a model to view trends.")
-            result = fetch_trends_for_model(model_id, included_risks)
-            model_name = result[1] if result else model_id
-            return make_trends_plot(model_id, model_name or model_id, included_risks)
+        def on_risk_row_click(evt: gr.SelectData, risk_df: pd.DataFrame, name_to_id: dict):
+            """Set model filter and switch to Probe Results tab.
+
+            Only updates model_filter, category_filter, and tabs — never touches
+            tab-internal display components simultaneously, which corrupts Gradio 5
+            session state when a parent (tabs) and its children are updated together.
+            The probe_tab.select event then fires and loads the actual data.
+            """
+            try:
+                model_name = str(risk_df.iloc[evt.index[0]]["Model"])
+            except Exception:
+                return gr.update(), gr.update(), gr.update()
+
+            model_id = name_to_id.get(model_name, "")
+            return (
+                gr.update(value=model_id),                # model_filter
+                gr.update(value="All"),                   # category_filter
+                gr.update(selected="probe_results"),      # tabs → switch tab
+            )
 
         def on_compare_update(selected_values: list[str], included_risks: list[str]):
             if not selected_values or not included_risks:
                 return _empty_fig("Select models to compare.")
-            # Resolve names: fetch all models and build id→name map
             all_models = fetch_models()
             id_to_name = {mid: name for name, mid in all_models}
             entries = [(mid, id_to_name.get(mid, mid)) for mid in selected_values]
@@ -609,8 +545,8 @@ def build_app() -> gr.Blocks:
             inputs=None,
             outputs=[
                 category_filter, model_filter, leaderboard_table,
-                risk_table,
-                trends_model, compare_models,
+                risk_table, model_name_to_id,
+                compare_models,
                 run_summary_table, runs_table,
             ],
         )
@@ -618,19 +554,22 @@ def build_app() -> gr.Blocks:
         # Risk Leaderboard tab
         risk_filter.change(fn=on_risk_filter_change, inputs=[risk_filter], outputs=[risk_table])
         risk_refresh_btn.click(fn=on_risk_filter_change, inputs=[risk_filter], outputs=[risk_table])
+        # Row click: only switch tab + set filter values; probe_tab.select handles the data load
+        risk_table.select(
+            fn=on_risk_row_click,
+            inputs=[risk_table, model_name_to_id],
+            outputs=[model_filter, category_filter, tabs],
+        )
 
         # Probe Results tab
+        # probe_tab.select fires on normal navigation AND after programmatic tab switch,
+        # so it handles both the "jump from risk leaderboard" and "user clicks tab" cases.
+        probe_tab.select(
+            fn=on_probe_filter_change,
+            inputs=[category_filter, model_filter],
+            outputs=[leaderboard_table, detail_table, current_run_id, selected_probe_label, attempts_viewer],
+        )
         refresh_btn.click(
-            fn=on_probe_filter_change,
-            inputs=[category_filter, model_filter],
-            outputs=[leaderboard_table, detail_table, current_run_id, selected_probe_label, attempts_viewer],
-        )
-        category_filter.change(
-            fn=on_probe_filter_change,
-            inputs=[category_filter, model_filter],
-            outputs=[leaderboard_table, detail_table, current_run_id, selected_probe_label, attempts_viewer],
-        )
-        model_filter.change(
             fn=on_probe_filter_change,
             inputs=[category_filter, model_filter],
             outputs=[leaderboard_table, detail_table, current_run_id, selected_probe_label, attempts_viewer],
@@ -640,11 +579,6 @@ def build_app() -> gr.Blocks:
             inputs=[detail_table, current_run_id],
             outputs=[selected_probe_label, attempts_viewer],
         )
-
-        # Trends tab
-        trends_model.change(fn=on_trends_update, inputs=[trends_model, trends_risk_filter], outputs=[trends_plot])
-        trends_risk_filter.change(fn=on_trends_update, inputs=[trends_model, trends_risk_filter], outputs=[trends_plot])
-        trends_refresh_btn.click(fn=on_trends_update, inputs=[trends_model, trends_risk_filter], outputs=[trends_plot])
 
         # Compare tab
         compare_models.change(fn=on_compare_update, inputs=[compare_models, compare_risk_filter], outputs=[compare_plot])

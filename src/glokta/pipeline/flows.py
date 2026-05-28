@@ -151,6 +151,9 @@ def _execute_scan(
     if not remaining:
         logger.info(f"Run {run_id}: all probes already complete, skipping scan")
         return {"probe_results_count": len(done_probes), "skipped": True}
+    else:
+        logger.info(f"Remaining probes: {remaining}")
+
 
     if model_name.startswith("huggingface/"):
         rpm_limit = settings.hf_rpm_limit
