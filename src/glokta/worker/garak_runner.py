@@ -16,30 +16,15 @@ logger = logging.getLogger(__name__)
 GARAK_TIMEOUT_SECONDS = 3600
 
 DEFAULT_PROBE_CATEGORIES = [
-    "encoding",        # Prompt injection — encoding evasion
-    "dan",             # Jailbreaking — DAN variants
-    "goodside",        # Prompt injection — Riley Goodside techniques
-    "promptinject",    # Prompt injection — HouYi framework
-    "malwaregen",      # Harmful content — malware generation
-    "continuation",    # Harmful content — toxic text continuation
-    "lmrc",            # Safety alignment — Language Model Risk Cards
-    "leakreplay",      # Information leakage — training data memorization
-    "snowball",        # Safety alignment — escalating false claims
-    "badchars",        # Prompt injection — control character evasion
-]
-
-# LLM01-focused probe set for training data collection runs.
-# atkgen is excluded — queue it as a separate Run (interactive overhead).
-TRAINING_PROBE_CATEGORIES = [
-    "dan",
-    "goodside",
-    "encoding",
-    "jailbreak",
-    "grandma",
-    "tap",
-    "suffix",
-    "realtoxicityprompts",
-    "lmrc",
+    "ansiescape",           # Terminal Manipulation / Log Poisoning
+    "apikey",               # Synthetic Credential Generation
+    "av_spam_scanning",     # Missing Output Security Controls
+    "exploitation",         # Code Injection (SQLi, SSTI, RCE)
+    "malwaregen",           # Weaponization of Code Generation
+    "packagehallucination", # Supply Chain Poisoning
+    "promptinject",         # Prompt Injection / String Hijacking
+    "sysprompt_extraction", # Information Disclosure / Reconnaissance
+    "web_injection",        # XSS, CSRF, and Data Exfiltration
 ]
 
 
