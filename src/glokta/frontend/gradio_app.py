@@ -61,9 +61,9 @@ def _probe_row(pr: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def fetch_probe_categories() -> list[str]:
-    data = _get("/api/leaderboard", params={"page_size": 200})
+    data = _get("/api/leaderboard", params={"page_size": 100})
     if not data or not data.get("rows"):
-        return []
+        return ["All"]
     categories = sorted({row["probe_category"] for row in data["rows"]})
     return ["All"] + categories
 
@@ -321,6 +321,7 @@ def build_app() -> gr.Blocks:
                         choices=["All"],
                         value="All",
                         interactive=True,
+                        allow_custom_value=True,
                         scale=2,
                     )
                     model_filter = gr.Dropdown(
