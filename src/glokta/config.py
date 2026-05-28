@@ -23,11 +23,11 @@ class Settings(BaseSettings):
 
     # OpenRouter
     openrouter_api_key: str = ""
-    openrouter_rpm_limit: int = 60  # conservative free-tier default; override via env
+    openrouter_rpm_limit: int = 600
     garak_parallel_attempts: int = 10
-    garak_timeout_seconds: int = 7200 * 4
-    garak_soft_probe_prompt_cap: int = 50   # meaningful sample size per probe
-    garak_soft_probe_prompt_cap_max: int = 50
+    garak_timeout_seconds: int = 46_000
+    garak_soft_probe_prompt_cap: int = 1_000   # meaningful sample size per probe
+    garak_soft_probe_prompt_cap_max: int = 1_000
 
     # API server
     api_host: str = "0.0.0.0"
@@ -48,8 +48,8 @@ class Settings(BaseSettings):
     # HuggingFace — token shared for dataset sync and inference provider scanning
     hf_dataset_repo: str = ""  # e.g. "your-username/open-llm-sec-leaderboard"
     hf_token: str = ""         # HuggingFace API token (write for export, read for import/inference)
-    scheduler_hf_top_n_models: int = 10
-    hf_rpm_limit: int = 10     # HF serverless inference has stricter rate limits than OpenRouter
+    scheduler_hf_top_n_models: int = 20
+    hf_rpm_limit: int = 600     # HF serverless inference has stricter rate limits than OpenRouter
 
     @field_validator("database_url")
     @classmethod
