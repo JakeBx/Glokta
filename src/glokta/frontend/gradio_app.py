@@ -10,6 +10,7 @@ Five tabs:
 """
 
 import json
+import re
 
 import httpx
 import gradio as gr
@@ -25,6 +26,11 @@ _PROBE_DETAIL_COLS = ["Probe Name", "Category", "Detector", "Pass", "Fail", "ASR
 
 _RISK_CHECKBOX_CHOICES = [(v["label"], k) for k, v in RISK_DEFINITIONS.items() if v["enabled"]]
 _RISK_CHECKBOX_DEFAULT = ACTIVE_RISKS
+
+
+def _strip_html(text: str) -> str:
+    """Remove HTML tags from a string (used to recover plain model name from markdown cells)."""
+    return re.sub(r"<[^>]+>", "", text).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +109,12 @@ def fetch_leaderboard(probe_category: str, model_id: str) -> pd.DataFrame:
 
 
 def fetch_risk_leaderboard(included_risks: list[str]) -> pd.DataFrame:
-    """Fetch risk-based leaderboard — Model, Provider, Overall Pass Rate only."""
+    """Fetch risk-based leaderboard — Model, Provider, Overall Pass Rate.
+
+    Rows for models with incomplete risk coverage are rendered with greyed-out
+    text and an HTML title tooltip listing the missing categories.  The Model
+    and Overall Pass Rate columns use markdown so the browser renders the HTML.
+    """
     empty = pd.DataFrame(columns=["Model", "Provider", "Overall Pass Rate"])
 
     if not included_risks:
@@ -114,14 +125,30 @@ def fetch_risk_leaderboard(included_risks: list[str]) -> pd.DataFrame:
     if not data or not data.get("models"):
         return empty
 
-    rows = [
-        {
-            "Model": m["model_name"],
-            "Provider": m["provider"],
-            "Overall Pass Rate": f"{m['overall_pass_rate']:.1%}" if m["overall_pass_rate"] is not None else "N/A",
-        }
-        for m in data["models"]
-    ]
+    rows = []
+    for m in data["models"]:
+        per_risk = m.get("per_risk", {})
+        missing = [r for r in included_risks if per_risk.get(r) is None]
+        overall_str = f"{m['overall_pass_rate']:.1%}" if m["overall_pass_rate"] is not None else "N/A"
+
+        if missing:
+            n_covered = len(included_risks) - len(missing)
+            tooltip = (
+                f"Incomplete coverage ({n_covered}/{len(included_risks)} risks). "
+                f"Overall score excludes: {', '.join(missing)}. "
+                f"Results may not be comparable to fully-scanned models."
+            )
+            # Wrap in HTML so the browser renders grey text and a hover tooltip.
+            # The title attribute provides native tooltip on hover.
+            style = 'style="opacity:0.45"'
+            model_cell = f'<span {style} title="{tooltip}">{m["model_name"]} ⚠</span>'
+            overall_cell = f'<span {style} title="{tooltip}">{overall_str}</span>'
+        else:
+            model_cell = m["model_name"]
+            overall_cell = overall_str
+
+        rows.append({"Model": model_cell, "Provider": m["provider"], "Overall Pass Rate": overall_cell})
+
     return pd.DataFrame(rows) if rows else empty
 
 
@@ -309,6 +336,8 @@ def build_app() -> gr.Blocks:
                     label="Risk Leaderboard",
                     interactive=False,
                     wrap=True,
+                    # markdown columns allow HTML opacity + title tooltip for partial-coverage rows
+                    datatype=["markdown", "str", "markdown"],
                 )
 
             # ----------------------------------------------------------------
@@ -500,9 +529,13 @@ def build_app() -> gr.Blocks:
             tab-internal display components simultaneously, which corrupts Gradio 5
             session state when a parent (tabs) and its children are updated together.
             The probe_tab.select event then fires and loads the actual data.
+
+            The Model cell may contain HTML markup (for partial-coverage styling),
+            so we strip tags before looking up the model ID.
             """
             try:
-                model_name = str(risk_df.iloc[evt.index[0]]["Model"])
+                raw = str(risk_df.iloc[evt.index[0]]["Model"])
+                model_name = _strip_html(raw)
             except Exception:
                 return gr.update(), gr.update(), gr.update()
 
