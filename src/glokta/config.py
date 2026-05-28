@@ -51,17 +51,11 @@ class Settings(BaseSettings):
     scheduler_hf_top_n_models: int = 20
     hf_rpm_limit: int = 600     # HF serverless inference has stricter rate limits than OpenRouter
 
-    # HF Space mode — read-only dashboard backed by HF Dataset instead of live DB
-    hf_space_mode: bool = False
-
     @field_validator("database_url")
     @classmethod
     def database_url_must_be_set(cls, v: str) -> str:
-        """Default to SQLite in HF Space / test mode; otherwise require DATABASE_URL."""
-        if not v:
-            hf_space = os.environ.get("HF_SPACE_MODE", "").lower() in ("1", "true")
-            if os.environ.get("TESTING") or hf_space:
-                return "sqlite:///glokta.db"
+        """Raise at startup if DATABASE_URL is missing outside of test runs."""
+        if not v and not os.environ.get("TESTING"):
             raise ValueError(
                 "DATABASE_URL must be set. "
                 "Add it to your .env file or export it as an environment variable. "
@@ -72,9 +66,8 @@ class Settings(BaseSettings):
     @field_validator("openrouter_api_key")
     @classmethod
     def api_key_must_be_set(cls, v: str) -> str:
-        """Require API key unless in HF Space mode or test mode (read-only dashboard)."""
-        hf_space = os.environ.get("HF_SPACE_MODE", "").lower() in ("1", "true")
-        if not v and not os.environ.get("TESTING") and not hf_space:
+        """Raise at startup if the API key is missing outside of test runs."""
+        if not v and not os.environ.get("TESTING"):
             raise ValueError(
                 "OPENROUTER_API_KEY must be set. "
                 "Add it to your .env file or export it as an environment variable."

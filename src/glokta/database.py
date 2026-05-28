@@ -116,9 +116,8 @@ def init_db() -> None:
 def migrate_db() -> None:
     """Add any columns that exist in the ORM models but are missing from the live DB.
 
-    Safe to call repeatedly — columns that already exist are silently skipped.
-    Supports both PostgreSQL (ADD COLUMN IF NOT EXISTS) and SQLite (catches
-    OperationalError on duplicate column).
+    Uses PostgreSQL's ``ADD COLUMN IF NOT EXISTS`` so it is safe to call
+    repeatedly — columns that already exist are silently skipped.
 
     This handles the common case where the codebase has added new nullable
     columns to an existing model (e.g. community-run metadata on ``runs``)
@@ -128,7 +127,6 @@ def migrate_db() -> None:
     Call after ``init_db()`` to bring an older live database up to the
     current schema.
     """
-    dialect = engine.dialect.name
     insp = inspect(engine)
     with engine.begin() as conn:
         for table in Base.metadata.sorted_tables:
@@ -141,24 +139,10 @@ def migrate_db() -> None:
                     continue
                 # Compile the column type to its SQL DDL string for this dialect.
                 col_type = col.type.compile(dialect=engine.dialect)
+                nullable_clause = "NULL" if col.nullable else "NOT NULL"
+                stmt = text(
+                    f'ALTER TABLE "{table.name}" ADD COLUMN IF NOT EXISTS '
+                    f'"{col.name}" {col_type} {nullable_clause}'
+                )
                 log.info("migrate_db: adding missing column %s.%s", table.name, col.name)
-                if dialect == "postgresql":
-                    nullable_clause = "NULL" if col.nullable else "NOT NULL"
-                    conn.execute(text(
-                        f'ALTER TABLE "{table.name}" ADD COLUMN IF NOT EXISTS '
-                        f'"{col.name}" {col_type} {nullable_clause}'
-                    ))
-                else:
-                    # SQLite doesn't support ADD COLUMN IF NOT EXISTS; catch duplicate error.
-                    try:
-                        conn.execute(text(
-                            f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {col_type}'
-                        ))
-                    except sa_exc.OperationalError as e:
-                        if "duplicate column" in str(e).lower():
-                            log.debug(
-                                "migrate_db: column %s.%s already exists (sqlite)",
-                                table.name, col.name,
-                            )
-                        else:
-                            raise
+                conn.execute(stmt)
