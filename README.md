@@ -4,20 +4,30 @@ Glokta is an automated vulnerability scanning platform that runs [garak](https:/
 
 Built as a project to explore what a reproducible, self-hostable LLM security leaderboard looks like in practice. Scores are raw pass rates from named garak probes — no proprietary weighting, no index. Any result can be reproduced by running the same garak command against the same model.
 
+## Quickstart
+
+```bash
+cp docker/.env.docker docker/.env
+# Edit docker/.env — set OPENROUTER_API_KEY and POSTGRES_PASSWORD
+docker compose -f docker/docker-compose.yml up
+```
+
+Once running: Gradio UI at `http://localhost:7860`, API docs at `http://localhost:8000/docs`, Prefect Server at `http://localhost:4200`.
+
 ## Features
 
 - **End-to-end garak ingest pipeline** — Prefect worker spawns garak as a subprocess, tails the JSONL output in real time, and streams results to PostgreSQL
 - **REST API with multi-axis filtering** — filter the leaderboard by probe category, model, and date; full Swagger UI at `/docs`
-- **Leaderboard UI** — filterable table with per-model drill-down showing probe-level breakdowns (Gradio, `localhost:7860`)
+- **Leaderboard UI** — filterable table with per-model drill-down showing probe-level breakdowns (Gradio, `localhost:7860` after `docker compose up`)
 - **Manual run triggering** — `POST /api/runs` with a model UUID; the Prefect pipeline picks it up on the next 2-minute poll
-- **Prefect orchestration** — automatic retries, Prefect Server UI at port 4200, SKIP LOCKED for safe concurrent workers
+- **Prefect orchestration** — automatic retries, Prefect Server UI at `localhost:4200` after `docker compose up`, SKIP LOCKED for safe concurrent workers
 - **Zero direct cost** — targets OpenRouter free-tier models exclusively; no spend required to run the full probe suite
 - **Docker Compose full-stack deployment** — one command starts API, Prefect Server, Prefect worker, Gradio frontend, and PostgreSQL
 - **10 probe categories** — `encoding`, `dan`, `goodside`, `promptinject`, `malwaregen`, `continuation`, `lmrc`, `leakreplay`, `snowball`, `badchars`
 
 ## API Reference
 
-Full interactive documentation at **http://localhost:8000/docs**.
+Full interactive documentation at **http://localhost:8000/docs** (after `docker compose up`).
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
