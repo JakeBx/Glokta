@@ -94,8 +94,8 @@ def parse_eval_entry(entry: dict, run_id: str) -> ProbeResult:
     # garak >=0.14 uses 'fails'; older versions used 'failed'
     fail_count = entry.get("fails", entry.get("failed", 0)) or 0
     pass_count = entry.get("passed", 0) or 0
-    total = entry.get("total_evaluated", 0) or 0
-    score = pass_count / total if total > 0 else None
+    total = entry.get("total_evaluated") or (pass_count + fail_count)
+    score = fail_count / total if total > 0 else None
 
     return ProbeResult(
         run_id=run_uuid,

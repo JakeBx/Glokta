@@ -86,7 +86,7 @@ def test_parse_eval_entry_maps_failed_to_fail_count(db_session):
 
 
 def test_parse_eval_entry_maps_score(db_session):
-    """'score' field maps to score on ProbeResult."""
+    """score is computed as ASR (fail_count / total)."""
     from glokta.ingest.jsonl_parser import parse_eval_entry
 
     entry = {
@@ -101,19 +101,19 @@ def test_parse_eval_entry_maps_score(db_session):
     run_id = "11111111-1111-1111-1111-111111111111"
     result = parse_eval_entry(entry, run_id)
 
-    assert result.score == 0.8
+    assert result.score == 0.2
 
 
 def test_parse_eval_entry_score_can_be_none(db_session):
-    """score is None when not present in entry."""
+    """score is None when total is zero (nothing evaluated)."""
     from glokta.ingest.jsonl_parser import parse_eval_entry
 
     entry = {
         "entry_type": "eval",
         "probe": "encoding.InjectBase64",
         "detector": "always.Fail",
-        "passed": 8,
-        "failed": 2,
+        "passed": 0,
+        "failed": 0,
         "run_id": "garak-run-001",
     }
     run_id = "11111111-1111-1111-1111-111111111111"

@@ -16,7 +16,7 @@ from glokta.config import settings
 
 API_BASE = settings.api_base_url
 
-_PROBE_DETAIL_COLS = ["Probe Name", "Category", "Detector", "Pass", "Fail", "Score", "Pass Rate"]
+_PROBE_DETAIL_COLS = ["Probe Name", "Category", "Detector", "Pass", "Fail", "ASR", "Pass Rate"]
 
 
 def _probe_row(pr: dict) -> dict:
@@ -28,7 +28,7 @@ def _probe_row(pr: dict) -> dict:
         "Detector": pr["detector"],
         "Pass": pr["pass_count"],
         "Fail": pr["fail_count"],
-        "Score": f"{pr['score']:.3f}" if pr.get("score") is not None else "N/A",
+        "ASR": f"{pr['score']:.3f}" if pr.get("score") is not None else "N/A",
         "Pass Rate": f"{pass_rate:.1%}",
     }
 
@@ -81,7 +81,7 @@ def fetch_leaderboard(probe_category: str, model_id: str) -> pd.DataFrame:
     data = _get("/api/leaderboard", params=params)
     if not data or not data.get("rows"):
         return pd.DataFrame(
-            columns=["Model", "Provider", "Probe Category", "Pass", "Fail", "Score", "Pass Rate"]
+            columns=["Model", "Provider", "Probe Category", "Pass", "Fail", "ASR", "Pass Rate"]
         )
 
     rows = []
@@ -92,7 +92,7 @@ def fetch_leaderboard(probe_category: str, model_id: str) -> pd.DataFrame:
             "Probe Category": row["probe_category"],
             "Pass": row["total_pass"],
             "Fail": row["total_fail"],
-            "Score": f"{row['score']:.3f}" if row["score"] is not None else "N/A",
+            "ASR": f"{row['score']:.3f}" if row["score"] is not None else "N/A",
             "Pass Rate": f"{row['pass_rate']:.1%}",
             "Origin": row.get("origin", "api"),
         })

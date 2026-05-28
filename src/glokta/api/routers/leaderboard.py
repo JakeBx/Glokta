@@ -86,7 +86,7 @@ def get_leaderboard(
         .join(latest_run, ProbeResult.run_id == latest_run.c.id)
         .join(Model, latest_run.c.model_id == Model.id)
         .group_by(Model.id, Model.name, Model.provider, ProbeResult.probe_category)
-        .order_by(func.coalesce(func.avg(ProbeResult.score), 0.0).desc())
+        .order_by(func.coalesce(func.avg(ProbeResult.score), 0.0).asc())
     )
     base = _apply_filters(base, probe_category, model_id)
 
