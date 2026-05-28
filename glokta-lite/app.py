@@ -1,5 +1,5 @@
 """
-garkboard-lite — Gradio dashboard backed directly by the HF Dataset.
+Glokta-lite — Gradio dashboard backed directly by the HF Dataset.
 
 Four tabs:
   1. Risk Leaderboard — risk-weighted pass rates; click a row to drill into Probe Results
