@@ -33,6 +33,10 @@ from glokta.config import settings
 from glokta.database import SessionLocal, init_db, migrate_db
 from glokta.models import Model, Run, ProbeResult, Attempt
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 def _date_to_str(value) -> str | None:
     """Convert a date or datetime to an ISO 8601 string, or return None."""

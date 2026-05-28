@@ -1,7 +1,7 @@
-"""Assess hit counts and readiness of training data collected from garak runs.
+"""Assess hit counts and readiness of training data collected from glokta runs.
 
 Usage:
-    PYTHONPATH=src python scripts/assess_garak_dataset.py [--triggered-by training] [--min-hits 3000]
+    PYTHONPATH=src python scripts/assess_glokta_dataset.py [--triggered-by training] [--min-hits 3000]
 
 Exit codes:
     0 — target reached (>= min_hits deduplicated hits)
@@ -61,12 +61,13 @@ def _is_hit(detector_outcome: dict | None) -> bool:
 
 
 def _run_assessment(triggered_by: str, min_hits: int) -> int:
-    from glokta.database import SessionLocal, init_db
+    from glokta.database import SessionLocal, init_db, migrate_db
     from glokta.models import Run
     from glokta.models.attempt import Attempt
     from glokta.models.model import Model
 
     init_db()
+    migrate_db()
     db = SessionLocal()
     try:
         rows = (
@@ -76,10 +77,10 @@ def _run_assessment(triggered_by: str, min_hits: int) -> int:
                 Attempt.probe_name,
                 Attempt.detector_outcome,
                 Model.name.label("model_name"),
+                Model.provider.label("provider"),
             )
             .join(Run, Attempt.run_id == Run.id)
             .join(Model, Run.model_id == Model.id)
-            .filter(Run.triggered_by == triggered_by, Run.status == "complete")
             .all()
         )
     finally:
@@ -101,12 +102,14 @@ def _run_assessment(triggered_by: str, min_hits: int) -> int:
     from collections import defaultdict
     by_family: dict[str, int] = defaultdict(int)
     by_model: dict[str, int] = defaultdict(int)
+    by_provider: dict[str, int] = defaultdict(int)
     for r in hits:
         family = r.probe_name.split(".")[0] if r.probe_name else "unknown"
         by_family[family] += 1
         by_model[r.model_name] += 1
+        by_provider[r.provider or "unknown"] += 1
 
-    print("=== GarakBoard Training Dataset Assessment ===")
+    print("=== Glokta Training Dataset Assessment ===")
     print(f"Total training run attempts:  {total_attempts:,}")
     print(f"Total hits (compliant):       {total_hits:,}")
     print(f"Deduplicated hits:            {dedup_hits:,}")
@@ -133,6 +136,14 @@ def _run_assessment(triggered_by: str, min_hits: int) -> int:
     print(f"  Models with hits: {models_with_hits}  [{model_status} — need >= 3]")
     print()
 
+    print("By provider:")
+    for provider_name, count in sorted(by_provider.items(), key=lambda x: -x[1]):
+        print(f"  {provider_name:<22} {count:,} hits")
+    providers_with_hits = len(by_provider)
+    provider_status = "PASS" if providers_with_hits >= 2 else "FAIL"
+    print(f"  Providers with hits: {providers_with_hits}  [{provider_status} — need >= 2]")
+    print()
+
     label = readiness_label(dedup_hits)
     print(f"READINESS: {label}")
 
@@ -140,7 +151,7 @@ def _run_assessment(triggered_by: str, min_hits: int) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Assess garak training dataset readiness")
+    parser = argparse.ArgumentParser(description="Assess glokta training dataset readiness")
     parser.add_argument("--triggered-by", default="training", help="Run trigger label to filter on")
     parser.add_argument("--min-hits", type=int, default=3000, help="Deduplicated hit target")
     args = parser.parse_args()
