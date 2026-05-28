@@ -1,5 +1,5 @@
 ---
-title: Garkboard Lite
+title: Glokta Lite
 emoji: 🔒
 colorFrom: blue
 colorTo: red
