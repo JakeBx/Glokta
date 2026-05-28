@@ -75,6 +75,32 @@ class TestBuildGarakConfigOpenRouter:
         assert "model" in body
 
 
+class TestDefaultProbeCategories:
+    """DEFAULT_PROBE_CATEGORIES must reflect the system security risk probe set."""
+
+    _EXPECTED = {
+        "ansiescape",
+        "apikey",
+        "av_spam_scanning",
+        "exploitation",
+        "malwaregen",
+        "packagehallucination",
+        "promptinject",
+        "sysprompt_extraction",
+        "web_injection",
+    }
+
+    def test_contains_exactly_security_risk_probes(self):
+        """DEFAULT_PROBE_CATEGORIES matches the security risk probe set exactly."""
+        from glokta.worker.garak_runner import DEFAULT_PROBE_CATEGORIES
+        assert set(DEFAULT_PROBE_CATEGORIES) == self._EXPECTED
+
+    def test_training_probe_categories_removed(self):
+        """TRAINING_PROBE_CATEGORIES is retired — it must not exist on the module."""
+        import glokta.worker.garak_runner as runner
+        assert not hasattr(runner, "TRAINING_PROBE_CATEGORIES")
+
+
 class TestRunGarakEnvOverrides:
     """run_garak should accept env_overrides dict instead of api_key str."""
 
