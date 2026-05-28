@@ -4,10 +4,12 @@ Architecture:
   _process_pending_runs(db, scan_fn) — pure state machine; testable without Prefect
   _execute_scan(run_id, model_name, probe_categories, db) — core garak logic; testable
   _discover_and_queue(db, ...) — discovery logic; testable
+  _queue_coverage_remediation(db) — queues partial-coverage models for missing categories
 
   execute_garak_scan_task — @task wrapping _execute_scan, with retries
   scan_pending_runs — @flow, picks pending runs and calls the task
   discover_and_queue_scans — @flow, fetches top models and creates pending runs
+  remediate_coverage_gaps — @flow, weekly; queues missing risk categories for all models
 """
 
 import io
@@ -32,6 +34,7 @@ from glokta.worker.garak_runner import (
     compute_remaining_probes,
     run_garak,
 )
+from glokta.risks import ACTIVE_RISKS
 from glokta.worker.hf_client import fetch_top_hf_models
 from glokta.worker.openrouter_client import fetch_top_models
 
@@ -417,3 +420,231 @@ def discover_and_queue_scans() -> None:
         raise
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Coverage remediation — pure helper + Prefect flow
+# ---------------------------------------------------------------------------
+
+def _queue_coverage_remediation(db: Session) -> dict:
+    """Find all models whose latest complete run is missing one or more active risk
+    categories, and queue a targeted run for the missing categories only.
+
+    A model is skipped if it already has a pending or running run (the existing
+    run will cover its missing categories via resume logic).
+
+    Returns a summary dict with counts and per-model details for verbose logging.
+    """
+    from datetime import date
+
+    active_set = set(ACTIVE_RISKS)
+
+    # Fetch all models that have at least one complete run
+    models_with_runs = (
+        db.query(Model)
+        .join(Run, Run.model_id == Model.id)
+        .filter(Run.status == "complete")
+        .distinct()
+        .all()
+    )
+
+    queued: list[dict] = []
+    skipped_active: list[str] = []   # already has a pending/running run
+    skipped_complete: list[str] = [] # already has full coverage
+    errors: list[str] = []
+
+    for model in models_with_runs:
+        try:
+            # Find the most recent complete run for this model
+            latest = (
+                db.query(Run)
+                .filter(Run.model_id == model.id, Run.status == "complete")
+                .order_by(Run.completed_at.desc())
+                .first()
+            )
+            if not latest:
+                continue
+
+            # Which categories does the latest run actually have results for?
+            covered = {
+                row[0]
+                for row in db.query(ProbeResult.probe_category)
+                .filter(ProbeResult.run_id == latest.id)
+                .distinct()
+                .all()
+            }
+            missing = sorted(active_set - covered)
+
+            if not missing:
+                skipped_complete.append(model.name)
+                continue
+
+            # Skip if there's already an in-flight run — it will handle missing categories
+            active = (
+                db.query(Run)
+                .filter(Run.model_id == model.id, Run.status.in_(["pending", "running"]))
+                .first()
+            )
+            if active:
+                skipped_active.append(model.name)
+                logger.info(
+                    "COVERAGE-REMEDIATION | SKIP | %s | already has active run %s",
+                    model.name, str(active.id),
+                )
+                continue
+
+            # Queue a targeted run for the missing categories only
+            import json as _json
+            remediation_run = Run(
+                model_id=model.id,
+                triggered_by="scheduled",
+                status="pending",
+                probe_categories_json=_json.dumps(missing),
+            )
+            db.add(remediation_run)
+            db.flush()
+
+            queued.append({
+                "model": model.name,
+                "run_id": str(remediation_run.id),
+                "missing_categories": missing,
+                "covered_categories": sorted(covered),
+            })
+            logger.info(
+                "COVERAGE-REMEDIATION | QUEUED | %s | run=%s | missing=%s",
+                model.name, str(remediation_run.id), missing,
+            )
+
+        except Exception as exc:
+            errors.append(f"{model.name}: {exc}")
+            logger.error(
+                "COVERAGE-REMEDIATION | ERROR | %s | %s", model.name, exc
+            )
+
+    db.commit()
+
+    return {
+        "queued": queued,
+        "skipped_already_active": skipped_active,
+        "skipped_full_coverage": skipped_complete,
+        "errors": errors,
+    }
+
+
+def _log_remediation_summary(result: dict) -> None:
+    """Emit a structured, unambiguous summary of a remediation run to the logger.
+
+    Designed so that anyone reading Prefect logs can immediately tell whether
+    the remediation did or did not fix the coverage gaps, and for which models.
+    """
+    queued = result["queued"]
+    skipped_active = result["skipped_already_active"]
+    skipped_complete = result["skipped_full_coverage"]
+    errors = result["errors"]
+
+    sep = "=" * 72
+
+    logger.info(sep)
+    logger.info("COVERAGE-REMEDIATION SUMMARY")
+    logger.info(sep)
+    logger.info(
+        "Models queued for remediation : %d", len(queued)
+    )
+    logger.info(
+        "Models with full coverage (no action needed) : %d", len(skipped_complete)
+    )
+    logger.info(
+        "Models skipped (active run already in flight) : %d", len(skipped_active)
+    )
+    logger.info(
+        "Errors encountered             : %d", len(errors)
+    )
+    logger.info(sep)
+
+    if queued:
+        logger.info("REMEDIATION QUEUED — the following models will be re-scanned:")
+        for entry in queued:
+            logger.info(
+                "  [QUEUED] %-60s  run=%-36s  missing=%s",
+                entry["model"], entry["run_id"], entry["missing_categories"],
+            )
+    else:
+        logger.info(
+            "NO MODELS QUEUED — either all models have full coverage, "
+            "all gaps have active runs in flight, or no models have been scanned yet."
+        )
+
+    if skipped_active:
+        logger.info("SKIPPED (active run in flight — will self-heal):")
+        for name in skipped_active:
+            logger.info("  [SKIP-ACTIVE] %s", name)
+
+    if errors:
+        logger.warning("ERRORS — these models were NOT remediated:")
+        for msg in errors:
+            logger.warning("  [ERROR] %s", msg)
+
+    logger.info(sep)
+
+    if queued and not errors:
+        logger.info(
+            "OUTCOME: REMEDIATION RUNS QUEUED SUCCESSFULLY. "
+            "Coverage gaps will close once scan-pending-runs processes these runs."
+        )
+    elif queued and errors:
+        logger.warning(
+            "OUTCOME: PARTIAL — %d runs queued, but %d models had errors and were NOT remediated.",
+            len(queued), len(errors),
+        )
+    elif not queued and not errors:
+        logger.info(
+            "OUTCOME: NO ACTION NEEDED — all scanned models have full risk coverage "
+            "or have active runs that will close the gaps."
+        )
+    else:
+        logger.error(
+            "OUTCOME: FAILED — no runs were queued and %d errors occurred. "
+            "Coverage gaps were NOT remediated. Investigate errors above.",
+            len(errors),
+        )
+
+    logger.info(sep)
+
+
+@flow(name="remediate-coverage-gaps", log_prints=True)
+def remediate_coverage_gaps() -> None:
+    """Weekly flow: find models with incomplete risk coverage and queue targeted re-scans.
+
+    For each model whose latest complete run is missing one or more of the 9 active
+    risk categories, queues a new Run with probe_categories_json set to only the
+    missing categories.  The existing resume logic in _execute_scan means already-
+    completed probes within those categories are also skipped, so each re-scan is
+    as targeted as possible.
+
+    Logs are intentionally verbose — the outcome section makes it unambiguous whether
+    remediation succeeded, partially succeeded, or failed.
+    """
+    if not settings.scheduler_enabled:
+        logger.info("COVERAGE-REMEDIATION | scheduler_enabled=False — skipping")
+        return
+
+    logger.info("COVERAGE-REMEDIATION | starting | active_risks=%s", ACTIVE_RISKS)
+
+    db = SessionLocal()
+    try:
+        result = _queue_coverage_remediation(db)
+    except Exception as exc:
+        logger.error("COVERAGE-REMEDIATION | fatal error during queue phase: %s", exc)
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+    _log_remediation_summary(result)
+
+    # Raise if there were errors so Prefect marks the flow run as failed
+    if result["errors"]:
+        raise RuntimeError(
+            f"Coverage remediation completed with {len(result['errors'])} error(s). "
+            "See logs above for details."
+        )

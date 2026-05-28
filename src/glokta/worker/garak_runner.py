@@ -63,6 +63,31 @@ _OPENROUTER_URI = "https://openrouter.ai/api/v1/chat/completions"
 # HF Inference Providers router — model identified via the "model" field in the request body
 _HF_URI = "https://router.huggingface.co/v1/chat/completions"
 
+# Per-provider request timeouts.
+# HF serverless inference is slower, especially for large models — 180s gives breathing
+# room for thinking-mode models that stream a long reasoning preamble before the answer.
+_HF_REQUEST_TIMEOUT = 180
+_OPENROUTER_REQUEST_TIMEOUT = 90
+
+# Model name substrings that indicate thinking/reasoning mode is on by default.
+# For these models we inject the provider-specific flag to disable thinking so that:
+#   1. Responses fit within garak's response buffer
+#   2. Round-trip latency stays under _HF_REQUEST_TIMEOUT
+#   3. Response content is in $.choices[0].message.content (not reasoning_content)
+_THINKING_MODEL_SUBSTRINGS = (
+    "qwen3",          # Qwen3-* default to thinking mode on HF serverless
+    "deepseek-r",     # DeepSeek-R series
+    "deepseek-v4",    # DeepSeek-V4-Pro uses extended reasoning
+    "kimi-k2",        # Moonshot Kimi K2
+    "kimi_k2",
+)
+
+
+def _is_thinking_model(raw_model: str) -> bool:
+    """Return True if the model name suggests it defaults to thinking/reasoning mode."""
+    lower = raw_model.lower()
+    return any(sub in lower for sub in _THINKING_MODEL_SUBSTRINGS)
+
 
 def build_garak_config(
     model_name: str,
@@ -97,16 +122,26 @@ def build_garak_config(
         generator_name = _HF_GENERATOR_NAME
         uri = _HF_URI
         key_env_var = "HF_TOKEN"
+        request_timeout = _HF_REQUEST_TIMEOUT
         req_body: dict = {
             "model": raw_model,
             "messages": [{"role": "user", "content": "$INPUT"}],
             "stream": False,
         }
+        # Suppress thinking/reasoning mode for models that default to it.
+        # Without this, responses can be thousands of tokens of CoT that exceed
+        # both the timeout and garak's response buffer, causing mid-scan crashes.
+        if _is_thinking_model(raw_model):
+            req_body["thinking"] = {"type": "disabled"}
+            logger.info(
+                "build_garak_config: thinking suppression enabled for %s", raw_model
+            )
     else:
         raw_model = model_name.removeprefix("openrouter/")
         generator_name = _OPENROUTER_GENERATOR_NAME
         uri = _OPENROUTER_URI
         key_env_var = "OPENROUTER_API_KEY"
+        request_timeout = _OPENROUTER_REQUEST_TIMEOUT
         req_body = {
             "model": raw_model,
             "messages": [{"role": "user", "content": "$INPUT"}],
@@ -135,7 +170,7 @@ def build_garak_config(
                         "req_template_json_object": req_body,
                         "response_json": True,
                         "response_json_field": "$.choices[0].message.content",
-                        "request_timeout": 60,
+                        "request_timeout": request_timeout,
                     }
                 }
             },

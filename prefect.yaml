@@ -27,3 +27,12 @@ deployments:
     work_pool:
       name: glokta-process-pool
       job_variables: {}
+
+  - name: remediate-coverage-gaps
+    entrypoint: src/glokta/pipeline/flows.py:remediate_coverage_gaps
+    schedules:
+      - cron: "0 4 * * 1"
+        timezone: UTC
+    work_pool:
+      name: glokta-process-pool
+      job_variables: {}
