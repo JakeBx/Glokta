@@ -8,6 +8,10 @@ from glokta.schemas.leaderboard import (
     LeaderboardResponse,
     ProbeResultDetail,
     ModelDetailResponse,
+    RiskModelRow,
+    RiskLeaderboardResponse,
+    TrendPoint,
+    TrendResponse,
 )
 
 __all__ = [
@@ -24,4 +28,8 @@ __all__ = [
     "LeaderboardResponse",
     "ProbeResultDetail",
     "ModelDetailResponse",
+    "RiskModelRow",
+    "RiskLeaderboardResponse",
+    "TrendPoint",
+    "TrendResponse",
 ]
