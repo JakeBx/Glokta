@@ -1,5 +1,6 @@
 """Pydantic schemas for leaderboard query responses."""
 
+from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, computed_field
 
@@ -56,3 +57,33 @@ class ModelDetailResponse(BaseModel):
     run_id: UUID | None = None
     probe_results: list[ProbeResultDetail]
     summary: LeaderboardRow | None = None
+
+
+class RiskModelRow(BaseModel):
+    """One model's risk-based pass rates for the risk leaderboard."""
+    model_id: UUID
+    model_name: str
+    provider: str
+    overall_pass_rate: float | None  # None when model has no scan data for any included risk
+    per_risk: dict[str, float | None]  # category → pass_rate; None if no scan data for that category
+
+
+class RiskLeaderboardResponse(BaseModel):
+    """Risk-based leaderboard — one row per model."""
+    models: list[RiskModelRow]
+    included_risks: list[str]
+
+
+class TrendPoint(BaseModel):
+    """Pass rates for a single completed scan run."""
+    run_id: UUID
+    completed_at: datetime
+    per_risk: dict[str, float | None]
+    overall_pass_rate: float | None
+
+
+class TrendResponse(BaseModel):
+    """All historical scan results for a single model."""
+    model_id: UUID
+    model_name: str
+    points: list[TrendPoint]
