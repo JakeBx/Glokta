@@ -34,19 +34,7 @@ def fetch_top_hf_models(
 ) -> list[dict[str, Any]]:
     """Return up to `top_n` HuggingFace models scannable via the HF Router,
     ranked by downloads descending.
-
-    Fetches text-generation models with active serverless inference from the HF Hub,
-    then cross-filters against the HF Inference Providers Router's /v1/models endpoint
-    to exclude models not routable to any third-party inference provider.
-
-    Args:
-        hf_token: HuggingFace API token (read scope sufficient).
-        top_n:    Maximum number of models to return.
-
-    Each returned dict contains at least an ``id`` key with the bare HF model ID
-    (e.g. ``"meta-llama/Llama-3.1-8B-Instruct"`` — no ``huggingface/`` prefix).
     """
-    # Overfetch from Hub to compensate for Router filtering (~120 models in Router)
     overfetch = max(top_n * 10, 200)
     api = HfApi(token=hf_token)
     raw = api.list_models(

@@ -1,339 +1,207 @@
-"""Unit tests for the _discover_and_queue pipeline function — TDD red-green.
-
-Tests target the pure _discover_and_queue function, not the Prefect @flow wrapper.
-fetch_top_models is always mocked to avoid network calls.
-"""
+"""Unit tests for sync_model_statuses and queue_stale_models."""
 
 import os
 from datetime import date, datetime, timedelta, timezone
-from unittest.mock import patch
 
 import pytest
 
 os.environ["TESTING"] = "1"
 
-from glokta.models import Model, Run
+from glokta.infrastructure.db.orm import Model, Run
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-_TOP_MODEL = [
-    {"id": "meta-llama/llama-3-8b-instruct:free", "pricing": {"prompt": "0", "completion": "0"}},
-]
 
-_EXPENSIVE_MODEL = [
-    {"id": "openai/gpt-4o", "pricing": {"prompt": "0.000005", "completion": "0.000015"}},
-]
-
-
-def _completed_run_at(db_session, model: Model, days_ago: int) -> Run:
-    run = Run(
-        model_id=model.id,
-        status="complete",
-        triggered_by="test",
-        completed_at=datetime.now(timezone.utc) - timedelta(days=days_ago),
+def _make_model(db, name: str, source: str = "openrouter", status: str = "active") -> Model:
+    model = Model(
+        name=name,
+        provider=name.split("/")[1] if name.count("/") >= 1 else name,
+        snapshot_date=date.today(),
+        source=source,
+        status=status,
     )
-    db_session.add(run)
-    db_session.flush()
-    return run
+    db.add(model)
+    db.flush()
+    return model
+
+
+def _or_model(model_id: str) -> dict:
+    return {"id": model_id, "pricing": {"prompt": "0", "completion": "0"}}
+
+
+def _hf_model(model_id: str) -> dict:
+    return {"id": model_id}
 
 
 # ---------------------------------------------------------------------------
-# _discover_and_queue tests
+# TestSyncModelStatuses
 # ---------------------------------------------------------------------------
 
 
-class TestDiscoverAndQueue:
-    def _call(self, db_session, top_models, top_n=10, max_cost=100.0, ttl_days=7):
-        from glokta.pipeline.flows import _discover_and_queue
+class TestSyncModelStatuses:
+    def _call(self, db, openrouter_models=None, hf_models=None):
+        from glokta.application.scan_service import sync_model_statuses
+        return sync_model_statuses(db, openrouter_models or [], hf_models or [])
 
-        with patch("glokta.pipeline.flows.fetch_top_models", return_value=top_models):
-            return _discover_and_queue(
-                db_session,
-                api_key="test-key",
-                top_n=top_n,
-                max_scan_cost_usd=max_cost,
-                scan_ttl_days=ttl_days,
-            )
+    def test_upserts_new_openrouter_model_with_correct_source(self, db_session):
+        """A new OR model is created with source='openrouter' and status='active'."""
+        self._call(db_session, openrouter_models=[_or_model("openrouter/mistral/mistral-7b")])
 
-    def test_creates_pending_run_for_new_model(self, db_session):
-        """A model not in the DB gets a new Model row and a pending Run."""
-        result = self._call(db_session, _TOP_MODEL)
+        model = db_session.query(Model).filter_by(name="openrouter/mistral/mistral-7b").first()
+        assert model is not None
+        assert model.source == "openrouter"
+        assert model.status == "active"
 
-        model = db_session.query(Model).filter(
-            Model.name == "openrouter/meta-llama/llama-3-8b-instruct:free"
-        ).first()
+    def test_upserts_new_hf_model_with_correct_source(self, db_session):
+        """A new HF model is created with source='hf' and status='active'."""
+        self._call(db_session, hf_models=[_hf_model("huggingface/meta-llama/Llama-3.1-8B-Instruct")])
+
+        model = db_session.query(Model).filter_by(name="huggingface/meta-llama/Llama-3.1-8B-Instruct").first()
+        assert model is not None
+        assert model.source == "hf"
+        assert model.status == "active"
+
+    def test_marks_previously_active_model_as_archived_when_not_in_top_list(self, db_session):
+        """A non-manual model active in DB but absent from the new top list → archived."""
+        _make_model(db_session, "openrouter/x/old-model", source="openrouter", status="active")
+        db_session.commit()
+
+        self._call(db_session, openrouter_models=[_or_model("openrouter/y/new-model")])
+
+        old = db_session.query(Model).filter_by(name="openrouter/x/old-model").first()
+        assert old.status == "archived"
+
+    def test_does_not_archive_manual_source_models(self, db_session):
+        """Models with source='manual' are never archived by sync."""
+        _make_model(db_session, "openrouter/x/manual-model", source="manual", status="active")
+        db_session.commit()
+
+        self._call(db_session, openrouter_models=[_or_model("openrouter/y/new-model")])
+
+        manual = db_session.query(Model).filter_by(name="openrouter/x/manual-model").first()
+        assert manual.status == "active"
+
+    def test_reactivates_archived_model_that_returns_to_top_list(self, db_session):
+        """An archived model that reappears in the top list is set back to active."""
+        _make_model(db_session, "openrouter/x/returning-model", source="openrouter", status="archived")
+        db_session.commit()
+
+        self._call(db_session, openrouter_models=[_or_model("openrouter/x/returning-model")])
+
+        model = db_session.query(Model).filter_by(name="openrouter/x/returning-model").first()
+        assert model.status == "active"
+
+    def test_returns_upserted_and_archived_counts(self, db_session):
+        """Return dict has 'upserted' and 'archived' integer keys."""
+        result = self._call(db_session, openrouter_models=[_or_model("openrouter/a/b")])
+        assert isinstance(result.get("upserted"), int)
+        assert isinstance(result.get("archived"), int)
+
+    def test_hf_model_gets_hf_prefix_if_missing(self, db_session):
+        """HF model ID without prefix gets huggingface/ prepended."""
+        self._call(db_session, hf_models=[_hf_model("meta-llama/Llama-3.1-8B")])
+
+        model = db_session.query(Model).filter_by(name="huggingface/meta-llama/Llama-3.1-8B").first()
         assert model is not None
 
-        run = db_session.query(Run).filter(Run.model_id == model.id).first()
-        assert run is not None
-        assert run.status == "pending"
-        assert run.triggered_by == "scheduled"
+    def test_openrouter_model_gets_prefix_if_missing(self, db_session):
+        """OR model ID without prefix gets openrouter/ prepended."""
+        self._call(db_session, openrouter_models=[_or_model("mistral/mistral-7b")])
+
+        model = db_session.query(Model).filter_by(name="openrouter/mistral/mistral-7b").first()
+        assert model is not None
+
+    def test_does_not_archive_openrouter_models_when_openrouter_fetch_returns_empty(self, db_session):
+        """If OpenRouter fetch returns [] but HF succeeds, OR models must NOT be archived.
+
+        This guards against the scraping-based OpenRouter client failing silently
+        and causing all existing OR models to be incorrectly marked as archived.
+        """
+        _make_model(db_session, "openrouter/x/existing", source="openrouter", status="active")
+        db_session.commit()
+
+        # OpenRouter returns nothing (fetch failed), HF returns one model
+        self._call(
+            db_session,
+            openrouter_models=[],
+            hf_models=[_hf_model("huggingface/meta-llama/Llama-3.1-8B")],
+        )
+
+        existing = db_session.query(Model).filter_by(name="openrouter/x/existing").first()
+        assert existing.status == "active", "OR model must not be archived when OR fetch fails"
+
+
+# ---------------------------------------------------------------------------
+# TestQueueStaleModels
+# ---------------------------------------------------------------------------
+
+
+class TestQueueStaleModels:
+    def _call(self, db, ttl_days: int = 7):
+        from glokta.application.scan_service import queue_stale_models
+        return queue_stale_models(db, scan_ttl_days=ttl_days)
+
+    def test_queues_active_model_with_null_last_scan_at(self, db_session):
+        """An ACTIVE model with last_scan_at=None gets a pending run."""
+        _make_model(db_session, "openrouter/a/model", source="openrouter", status="active")
+        db_session.commit()
+
+        result = self._call(db_session)
+
         assert result["queued"] == 1
-        assert result["skipped"] == 0
+        assert db_session.query(Run).count() == 1
 
-    def test_skips_model_with_recent_complete_run(self, db_session):
-        """A model with a complete run within TTL is skipped."""
-        model = Model(
-            name="openrouter/meta-llama/llama-3-8b-instruct:free",
-            provider="meta-llama",
-            snapshot_date=date.today(),
-        )
-        db_session.add(model)
-        db_session.flush()
-        _completed_run_at(db_session, model, days_ago=1)  # fresh — within 7d TTL
+    def test_skips_model_with_recent_last_scan_at(self, db_session):
+        """An ACTIVE model scanned within TTL is skipped."""
+        model = _make_model(db_session, "openrouter/a/fresh", source="openrouter", status="active")
+        model.last_scan_at = datetime.now(timezone.utc) - timedelta(days=1)
+        db_session.commit()
 
-        result = self._call(db_session, _TOP_MODEL, ttl_days=7)
+        result = self._call(db_session, ttl_days=7)
 
-        new_runs = (
-            db_session.query(Run)
-            .filter(Run.model_id == model.id, Run.status == "pending")
-            .count()
-        )
-        assert new_runs == 0
         assert result["skipped"] == 1
+        assert result["queued"] == 0
 
-    def test_queues_model_with_stale_complete_run(self, db_session):
-        """A model whose last complete run is older than TTL gets a new pending run."""
-        model = Model(
-            name="openrouter/meta-llama/llama-3-8b-instruct:free",
-            provider="meta-llama",
-            snapshot_date=date.today(),
-        )
-        db_session.add(model)
-        db_session.flush()
-        _completed_run_at(db_session, model, days_ago=10)  # stale — beyond 7d TTL
+    def test_queues_model_with_stale_last_scan_at(self, db_session):
+        """An ACTIVE model whose last scan is older than TTL gets queued."""
+        model = _make_model(db_session, "openrouter/a/stale", source="openrouter", status="active")
+        model.last_scan_at = datetime.now(timezone.utc) - timedelta(days=10)
+        db_session.commit()
 
-        result = self._call(db_session, _TOP_MODEL, ttl_days=7)
+        result = self._call(db_session, ttl_days=7)
 
-        new_runs = (
-            db_session.query(Run)
-            .filter(Run.model_id == model.id, Run.status == "pending")
-            .count()
-        )
-        assert new_runs == 1
         assert result["queued"] == 1
 
     def test_skips_model_with_existing_pending_run(self, db_session):
-        """A model that already has a pending run is not queued again."""
-        model = Model(
-            name="openrouter/meta-llama/llama-3-8b-instruct:free",
-            provider="meta-llama",
-            snapshot_date=date.today(),
-        )
-        db_session.add(model)
-        db_session.flush()
-        existing = Run(model_id=model.id, status="pending", triggered_by="test")
-        db_session.add(existing)
-        db_session.flush()
+        """An ACTIVE model with a pending run already in flight is skipped."""
+        model = _make_model(db_session, "openrouter/a/busy", source="openrouter", status="active")
+        db_session.add(Run(model_id=model.id, status="pending"))
+        db_session.commit()
 
-        result = self._call(db_session, _TOP_MODEL)
+        result = self._call(db_session)
 
-        pending_count = (
-            db_session.query(Run)
-            .filter(Run.model_id == model.id, Run.status == "pending")
-            .count()
-        )
-        assert pending_count == 1  # only the original, no duplicate
+        pending_count = db_session.query(Run).filter_by(status="pending").count()
+        assert pending_count == 1  # no new run added
         assert result["skipped"] == 1
 
-    def test_skips_model_with_running_run(self, db_session):
-        """A model with a running scan is not queued again."""
-        model = Model(
-            name="openrouter/meta-llama/llama-3-8b-instruct:free",
-            provider="meta-llama",
-            snapshot_date=date.today(),
-        )
-        db_session.add(model)
-        db_session.flush()
-        running = Run(model_id=model.id, status="running", triggered_by="test")
-        db_session.add(running)
-        db_session.flush()
+    def test_skips_archived_models(self, db_session):
+        """ARCHIVED models are never queued for scanning."""
+        _make_model(db_session, "openrouter/a/gone", source="openrouter", status="archived")
+        db_session.commit()
 
-        result = self._call(db_session, _TOP_MODEL)
+        result = self._call(db_session)
 
-        assert result["skipped"] == 1
-
-    def test_adds_openrouter_prefix_to_model_name(self, db_session):
-        """Model ID without openrouter/ prefix gets it prepended."""
-        result = self._call(db_session, _TOP_MODEL)
-
-        model = db_session.query(Model).first()
-        assert model.name.startswith("openrouter/")
-
-    def test_preserves_openrouter_prefix_if_already_present(self, db_session):
-        """Model ID already starting with openrouter/ is not double-prefixed."""
-        top_with_prefix = [
-            {"id": "openrouter/meta-llama/llama-3-8b-instruct:free", "pricing": {"prompt": "0", "completion": "0"}},
-        ]
-        self._call(db_session, top_with_prefix)
-
-        model = db_session.query(Model).first()
-        assert not model.name.startswith("openrouter/openrouter/")
-
-    def test_returns_queued_and_skipped_counts(self, db_session):
-        """Return value is a dict with queued and skipped integer keys."""
-        result = self._call(db_session, _TOP_MODEL)
-
-        assert isinstance(result.get("queued"), int)
-        assert isinstance(result.get("skipped"), int)
-
-    def test_noop_when_no_models_returned(self, db_session):
-        """Empty model list from OpenRouter produces no DB writes."""
-        result = self._call(db_session, [])
-
-        assert db_session.query(Model).count() == 0
         assert result["queued"] == 0
-        assert result["skipped"] == 0
 
-    def test_fetch_top_models_called_with_correct_args(self, db_session):
-        """_discover_and_queue passes api_key, top_n, max_scan_cost_usd to fetch_top_models."""
-        from glokta.pipeline.flows import _discover_and_queue
+    def test_sets_triggered_by_to_scheduled(self, db_session):
+        """Runs created by queue_stale_models have triggered_by='scheduled'."""
+        _make_model(db_session, "openrouter/a/model2", source="openrouter", status="active")
+        db_session.commit()
 
-        with patch("glokta.pipeline.flows.fetch_top_models", return_value=[]) as mock_fetch:
-            _discover_and_queue(
-                db_session,
-                api_key="my-key",
-                top_n=15,
-                max_scan_cost_usd=5.0,
-                scan_ttl_days=7,
-            )
+        self._call(db_session)
 
-        mock_fetch.assert_called_once_with(
-            api_key="my-key",
-            top_n=15,
-            max_scan_cost_usd=5.0,
-        )
-
-
-# ---------------------------------------------------------------------------
-# _discover_and_queue HF tests
-# ---------------------------------------------------------------------------
-
-_HF_TOP_MODEL = [{"id": "meta-llama/Llama-3.1-8B-Instruct"}]
-
-
-def _completed_run_at_hf(db_session, model: Model, days_ago: int) -> Run:
-    run = Run(
-        model_id=model.id,
-        status="complete",
-        triggered_by="test",
-        completed_at=datetime.now(timezone.utc) - timedelta(days=days_ago),
-    )
-    db_session.add(run)
-    db_session.flush()
-    return run
-
-
-class TestDiscoverAndQueueHf:
-    def _call(
-        self,
-        db_session,
-        or_models=None,
-        hf_models=None,
-        hf_token: str = "test-hf-token",
-        hf_top_n: int = 5,
-        top_n: int = 10,
-        ttl_days: int = 7,
-    ):
-        from glokta.pipeline.flows import _discover_and_queue
-
-        with patch("glokta.pipeline.flows.fetch_top_models", return_value=or_models or []):
-            with patch("glokta.pipeline.flows.fetch_top_hf_models", return_value=hf_models or []):
-                return _discover_and_queue(
-                    db_session,
-                    api_key="or-key",
-                    top_n=top_n,
-                    max_scan_cost_usd=100.0,
-                    scan_ttl_days=ttl_days,
-                    hf_token=hf_token,
-                    hf_top_n=hf_top_n,
-                )
-
-    def test_creates_pending_run_for_new_hf_model(self, db_session):
-        """A new HF model gets a huggingface/-prefixed Model row and a pending Run."""
-        result = self._call(db_session, hf_models=_HF_TOP_MODEL)
-
-        model = db_session.query(Model).filter(
-            Model.name == "huggingface/meta-llama/Llama-3.1-8B-Instruct"
-        ).first()
-        assert model is not None
-        assert model.provider == "meta-llama"
-
-        run = db_session.query(Run).filter(Run.model_id == model.id).first()
-        assert run is not None
-        assert run.status == "pending"
-        assert result["queued"] == 1
-
-    def test_hf_model_name_not_double_prefixed(self, db_session):
-        """HF model ID already carrying 'huggingface/' is not double-prefixed."""
-        models_with_prefix = [{"id": "huggingface/org/model"}]
-        self._call(db_session, hf_models=models_with_prefix)
-
-        model = db_session.query(Model).first()
-        assert model.name == "huggingface/org/model"
-        assert not model.name.startswith("huggingface/huggingface/")
-
-    def test_hf_discovery_skipped_when_hf_token_empty(self, db_session):
-        """When hf_token is empty string, fetch_top_hf_models is never called."""
-        from glokta.pipeline.flows import _discover_and_queue
-
-        with patch("glokta.pipeline.flows.fetch_top_models", return_value=[]):
-            with patch("glokta.pipeline.flows.fetch_top_hf_models") as mock_hf:
-                _discover_and_queue(
-                    db_session,
-                    api_key="key",
-                    top_n=5,
-                    max_scan_cost_usd=10.0,
-                    scan_ttl_days=7,
-                    hf_token="",
-                    hf_top_n=5,
-                )
-
-        mock_hf.assert_not_called()
-
-    def test_hf_discovery_skipped_when_hf_top_n_zero(self, db_session):
-        """When hf_top_n=0, HF discovery is also skipped."""
-        from glokta.pipeline.flows import _discover_and_queue
-
-        with patch("glokta.pipeline.flows.fetch_top_models", return_value=[]):
-            with patch("glokta.pipeline.flows.fetch_top_hf_models") as mock_hf:
-                _discover_and_queue(
-                    db_session,
-                    api_key="key",
-                    top_n=5,
-                    max_scan_cost_usd=10.0,
-                    scan_ttl_days=7,
-                    hf_token="tok",
-                    hf_top_n=0,
-                )
-
-        mock_hf.assert_not_called()
-
-    def test_openrouter_and_hf_models_both_queued(self, db_session):
-        """Both OR and HF models queued in a single call are reflected in counts."""
-        or_models = [{"id": "mistralai/mistral-7b-instruct:free", "pricing": {"prompt": "0", "completion": "0"}}]
-        hf_models = [{"id": "meta-llama/Llama-3.1-8B-Instruct"}]
-
-        result = self._call(db_session, or_models=or_models, hf_models=hf_models)
-
-        assert result["queued"] == 2
-        assert db_session.query(Model).count() == 2
-
-    def test_hf_model_skips_within_ttl(self, db_session):
-        """A HF model with a recent complete run is skipped."""
-        model = Model(
-            name="huggingface/meta-llama/Llama-3.1-8B-Instruct",
-            provider="meta-llama",
-            snapshot_date=date.today(),
-        )
-        db_session.add(model)
-        db_session.flush()
-        _completed_run_at_hf(db_session, model, days_ago=1)
-
-        result = self._call(db_session, hf_models=_HF_TOP_MODEL, ttl_days=7)
-
-        assert result["skipped"] == 1
-        assert result["queued"] == 0
+        run = db_session.query(Run).first()
+        assert run.triggered_by == "scheduled"

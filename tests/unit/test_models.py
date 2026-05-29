@@ -1,18 +1,20 @@
-"""Unit tests for SQLAlchemy models in glokta.models."""
+"""Unit tests for SQLAlchemy models and repositories in glokta."""
 
-import uuid
+import json
 from datetime import date, datetime
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from glokta.models import (
-    Model,
-    Run,
-    ProbeResult,
+from glokta.infrastructure.db.orm import (
     Attempt,
+    Model,
+    ProbeResult,
     ProbeRunQueue,
+    Run,
+    ScanDlq,
 )
+from glokta.infrastructure.db.repos import ModelRepository, ScanDlqRepository
 
 
 # =============================================================================
@@ -55,8 +57,8 @@ def test_model_name_is_unique(db_session):
         db_session.commit()
 
 
-def test_model_is_active_defaults_to_true(db_session):
-    """is_active defaults to True when not specified."""
+def test_model_status_defaults_to_active(db_session):
+    """status defaults to 'active' when not specified."""
     model = Model(
         name="gemini-pro",
         provider="Google",
@@ -65,7 +67,33 @@ def test_model_is_active_defaults_to_true(db_session):
     db_session.add(model)
     db_session.commit()
 
-    assert model.is_active is True
+    assert model.status == "active"
+
+
+def test_model_source_defaults_to_manual(db_session):
+    """source defaults to 'manual' when not specified."""
+    model = Model(
+        name="gemini-pro-manual",
+        provider="Google",
+        snapshot_date=date(2024, 1, 1),
+    )
+    db_session.add(model)
+    db_session.commit()
+
+    assert model.source == "manual"
+
+
+def test_model_has_last_scan_at_nullable(db_session):
+    """last_scan_at is nullable."""
+    model = Model(
+        name="gemini-pro-nullable",
+        provider="Google",
+        snapshot_date=date(2024, 1, 1),
+    )
+    db_session.add(model)
+    db_session.commit()
+
+    assert model.last_scan_at is None
 
 
 def test_model_has_runs_relationship(db_session):
@@ -619,3 +647,150 @@ def test_attempt_created_at_defaults(db_session):
 
     assert attempt.created_at is not None
     assert isinstance(attempt.created_at, datetime)
+
+
+# =============================================================================
+# Group 6: ScanDlq (scan_dlq table)
+# =============================================================================
+
+def test_scan_dlq_can_be_created(db_session):
+    """A ScanDlq entry can be created and queried."""
+    model = Model(
+        name="dlq-test-model",
+        provider="TestProvider",
+        snapshot_date=date(2024, 1, 1),
+    )
+    db_session.add(model)
+    db_session.commit()
+
+    run = Run(model_id=model.id)
+    db_session.add(run)
+    db_session.commit()
+
+    entry = ScanDlq(
+        model_id=model.id,
+        run_id=run.id,
+        reason="scan_failed",
+        error_message="subprocess timed out",
+    )
+    db_session.add(entry)
+    db_session.commit()
+
+    retrieved = db_session.query(ScanDlq).filter_by(model_id=model.id).first()
+    assert retrieved is not None
+    assert retrieved.reason == "scan_failed"
+    assert retrieved.error_message == "subprocess timed out"
+    assert retrieved.run_id == run.id
+    assert retrieved.missing_categories is None
+    assert isinstance(retrieved.created_at, datetime)
+
+
+def test_scan_dlq_incomplete_coverage_stores_categories(db_session):
+    """A ScanDlq entry for incomplete coverage can store missing_categories as JSON."""
+    import json
+
+    model = Model(
+        name="dlq-coverage-model",
+        provider="TestProvider",
+        snapshot_date=date(2024, 1, 1),
+    )
+    db_session.add(model)
+    db_session.commit()
+
+    missing = json.dumps(["malwaregen", "promptinject"])
+    entry = ScanDlq(
+        model_id=model.id,
+        reason="incomplete_coverage",
+        missing_categories=missing,
+    )
+    db_session.add(entry)
+    db_session.commit()
+
+    retrieved = db_session.query(ScanDlq).filter_by(model_id=model.id).first()
+    assert json.loads(retrieved.missing_categories) == ["malwaregen", "promptinject"]
+    assert retrieved.run_id is None
+
+
+# =============================================================================
+# Group 7: Repository tests
+# =============================================================================
+
+def test_model_repo_list_active_returns_active_models(db_session):
+    """ModelRepository.list_active returns models with status='active'."""
+    active = Model(name="active-model", provider="P", snapshot_date=date(2024, 1, 1), status="active")
+    archived = Model(name="archived-model", provider="P", snapshot_date=date(2024, 1, 1), status="archived")
+    db_session.add_all([active, archived])
+    db_session.commit()
+
+    repo = ModelRepository(db_session)
+    results = repo.list_active()
+    names = [m.name for m in results]
+    assert "active-model" in names
+    assert "archived-model" not in names
+
+
+def test_model_repo_upsert_from_source_creates_new_model(db_session):
+    """upsert_from_source creates a model with the given source and status=active."""
+    repo = ModelRepository(db_session)
+    model = repo.upsert_from_source("openrouter/mistral/mistral-7b", "mistral", "openrouter")
+    db_session.commit()
+
+    assert model.name == "openrouter/mistral/mistral-7b"
+    assert model.source == "openrouter"
+    assert model.status == "active"
+
+
+def test_model_repo_upsert_from_source_reactivates_archived_model(db_session):
+    """upsert_from_source sets status=active on an archived model."""
+    existing = Model(
+        name="openrouter/x/y",
+        provider="x",
+        snapshot_date=date(2024, 1, 1),
+        source="openrouter",
+        status="archived",
+    )
+    db_session.add(existing)
+    db_session.commit()
+
+    repo = ModelRepository(db_session)
+    model = repo.upsert_from_source("openrouter/x/y", "x", "openrouter")
+    db_session.commit()
+
+    assert model.status == "active"
+    assert model.id == existing.id
+
+
+def test_scan_dlq_repo_create(db_session):
+    """ScanDlqRepository.create inserts a DLQ entry."""
+    model = Model(name="dlq-repo-model", provider="P", snapshot_date=date(2024, 1, 1))
+    db_session.add(model)
+    db_session.commit()
+
+    repo = ScanDlqRepository(db_session)
+    entry = repo.create(
+        model_id=model.id,
+        reason="scan_failed",
+        error_message="timeout",
+    )
+    db_session.commit()
+
+    assert entry.id is not None
+    assert entry.model_id == model.id
+    assert entry.reason == "scan_failed"
+    assert entry.error_message == "timeout"
+    assert entry.run_id is None
+
+
+def test_scan_dlq_repo_recent_for_model(db_session):
+    """ScanDlqRepository.recent_for_model returns entries in desc order."""
+    model = Model(name="dlq-recent-model", provider="P", snapshot_date=date(2024, 1, 1))
+    db_session.add(model)
+    db_session.commit()
+
+    repo = ScanDlqRepository(db_session)
+    repo.create(model_id=model.id, reason="scan_failed", error_message="first")
+    repo.create(model_id=model.id, reason="incomplete_coverage")
+    db_session.commit()
+
+    recent = repo.recent_for_model(model.id, limit=10)
+    assert len(recent) == 2

@@ -27,11 +27,11 @@ from datetime import date
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from glokta.config import settings
-from glokta.database import SessionLocal, init_db
-from glokta.models import Model, Run
-from glokta.worker.garak_runner import DEFAULT_PROBE_CATEGORIES
-from glokta.worker.hf_client import fetch_top_hf_models
-from glokta.worker.openrouter_client import estimate_scan_cost_usd, fetch_top_models
+from glokta.infrastructure.db.session import SessionLocal, init_db
+from glokta.infrastructure.db.orm import Model, Run
+from glokta.infrastructure.garak.runner import DEFAULT_PROBE_CATEGORIES
+from glokta.infrastructure.hf.client import fetch_top_hf_models
+from glokta.infrastructure.openrouter.client import estimate_scan_cost_usd, fetch_top_models
 
 _OVERFETCH_MULTIPLIER = 5  # for --new-only: fetch this many candidates per desired slot
 

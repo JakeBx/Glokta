@@ -98,22 +98,7 @@ def build_garak_config(
     soft_probe_prompt_cap: int | None = None,
     probe_spec_override: str | None = None,
 ) -> dict:
-    """
-    Build a garak configuration dict suitable for writing as YAML.
-
-    Args:
-        model_name: Model name with provider prefix, e.g.
-            'openrouter/meta-llama/llama-3-8b-instruct:free' or
-            'huggingface/meta-llama/Llama-3.1-8B-Instruct'
-        probe_categories: List of probe category names e.g. ['encoding', 'malwaregen']
-        output_dir: Directory where garak should write its JSONL output
-        parallel_attempts: Number of parallel attempts (default 1)
-        rpm_limit: Optional rate limit in requests per minute for the generator
-        soft_probe_prompt_cap: Optional limit on prompts per probe (default None)
-
-    Returns:
-        dict suitable for yaml.dump()
-    """
+    """Build a garak configuration dict suitable for writing as YAML."""
     probes = probe_categories if probe_categories else DEFAULT_PROBE_CATEGORIES
     spec = probe_spec_override if probe_spec_override is not None else ",".join(probes)
 
@@ -128,9 +113,6 @@ def build_garak_config(
             "messages": [{"role": "user", "content": "$INPUT"}],
             "stream": False,
         }
-        # Suppress thinking/reasoning mode for models that default to it.
-        # Without this, responses can be thousands of tokens of CoT that exceed
-        # both the timeout and garak's response buffer, causing mid-scan crashes.
         if _is_thinking_model(raw_model):
             req_body["thinking"] = {"type": "disabled"}
             logger.info(
@@ -200,20 +182,14 @@ def run_garak(
     timeout: int = GARAK_TIMEOUT_SECONDS,
     pf_logger: logging.Logger | None = None,
 ) -> str:
-    """
-    Write a garak YAML config and run garak as a subprocess.
-
-    Args:
-        config: garak config dict from build_garak_config()
-        env_overrides: Environment variables to inject (e.g. {"OPENROUTER_API_KEY": "..."}
-            for OpenRouter or {"HF_TOKEN": "..."} for HuggingFace).
+    """Write a garak YAML config and run garak as a subprocess.
 
     Returns:
         Path to the garak JSONL output file
 
     Raises:
         subprocess.CalledProcessError: If garak exits with non-zero status
-        subprocess.TimeoutExpired: If garak does not complete within GARAK_TIMEOUT_SECONDS
+        subprocess.TimeoutExpired: If garak does not complete within timeout
         FileNotFoundError: If the expected JSONL output file is not found after run
     """
     output_dir = config["reporting"]["report_dir"]

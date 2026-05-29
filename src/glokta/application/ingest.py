@@ -8,7 +8,7 @@ from typing import TextIO
 
 from sqlalchemy.orm import Session
 
-from glokta.models import ProbeResult, Attempt
+from glokta.infrastructure.db.orm import Attempt, ProbeResult
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +22,32 @@ class IngestResult:
     skipped_count: int
 
 
+@dataclass
+class ProbeResultRecord:
+    """Parsed probe result — no SQLAlchemy dependency."""
+
+    run_id: uuid.UUID
+    probe_name: str
+    probe_category: str
+    detector: str
+    pass_count: int
+    fail_count: int
+    score: float | None
+
+
+@dataclass
+class AttemptRecord:
+    """Parsed attempt record — no SQLAlchemy dependency."""
+
+    run_id: uuid.UUID
+    probe_name: str
+    prompt: str | None
+    response: str | None
+    detector_outcome: dict
+
+
 def _extract_prompt_text(prompt) -> str | None:
-    """
-    Extract plain text from a garak prompt.
+    """Extract plain text from a garak prompt.
 
     Handles both the legacy format (plain string) and the garak >=0.14
     Conversation format (dict with a 'turns' list).
@@ -44,8 +67,7 @@ def _extract_prompt_text(prompt) -> str | None:
 
 
 def _extract_response_text(outputs) -> str | None:
-    """
-    Extract plain text from garak outputs.
+    """Extract plain text from garak outputs.
 
     Handles both the legacy format (plain string or None) and the garak >=0.14
     format (list of dicts with a 'text' key).
@@ -64,16 +86,8 @@ def _extract_response_text(outputs) -> str | None:
     return None
 
 
-def parse_eval_entry(entry: dict, run_id: str) -> ProbeResult:
-    """
-    Parse a garak 'eval' JSONL entry into a ProbeResult ORM object.
-
-    Args:
-        entry: Parsed dict from a JSONL line with entry_type='eval'
-        run_id: The UUID string of the DB run record this entry belongs to
-
-    Returns:
-        A ProbeResult instance (not yet added to a session)
+def parse_eval_entry(entry: dict, run_id: str) -> ProbeResultRecord:
+    """Parse a garak 'eval' JSONL entry into a ProbeResultRecord dataclass.
 
     Raises:
         ValueError: If entry_type is not 'eval' or required fields are missing
@@ -97,7 +111,7 @@ def parse_eval_entry(entry: dict, run_id: str) -> ProbeResult:
     total = entry.get("total_evaluated") or (pass_count + fail_count)
     score = fail_count / total if total > 0 else None
 
-    return ProbeResult(
+    return ProbeResultRecord(
         run_id=run_uuid,
         probe_name=probe_name,
         probe_category=probe_category,
@@ -108,16 +122,8 @@ def parse_eval_entry(entry: dict, run_id: str) -> ProbeResult:
     )
 
 
-def parse_attempt_entry(entry: dict, run_id: str) -> Attempt:
-    """
-    Parse a garak 'attempt' JSONL entry into an Attempt ORM object.
-
-    Args:
-        entry: Parsed dict from a JSONL line with entry_type='attempt'
-        run_id: The UUID string of the DB run record this entry belongs to
-
-    Returns:
-        An Attempt instance (not yet added to a session)
+def parse_attempt_entry(entry: dict, run_id: str) -> AttemptRecord:
+    """Parse a garak 'attempt' JSONL entry into an AttemptRecord dataclass.
 
     Raises:
         ValueError: If entry_type is not 'attempt' or required fields are missing
@@ -129,7 +135,7 @@ def parse_attempt_entry(entry: dict, run_id: str) -> Attempt:
     probe = entry.get("probe_classname") or entry.get("probe", "")
     run_uuid = uuid.UUID(run_id)
 
-    return Attempt(
+    return AttemptRecord(
         run_id=run_uuid,
         probe_name=probe,
         prompt=_extract_prompt_text(entry.get("prompt")),
@@ -139,8 +145,7 @@ def parse_attempt_entry(entry: dict, run_id: str) -> Attempt:
 
 
 def ingest_jsonl_file(source: str | TextIO, run_id: str, session: Session) -> IngestResult:
-    """
-    Parse a garak JSONL output file and insert all rows into the DB.
+    """Parse a garak JSONL output file and insert all rows into the DB.
 
     source may be a file path string or any file-like text object (e.g. io.StringIO),
     allowing callers that already have the content in memory to avoid a second disk read.
@@ -167,12 +172,26 @@ def ingest_jsonl_file(source: str | TextIO, run_id: str, session: Session) -> In
 
             try:
                 if entry_type == "eval":
-                    probe_result = parse_eval_entry(entry, run_id)
-                    session.add(probe_result)
+                    record = parse_eval_entry(entry, run_id)
+                    session.add(ProbeResult(
+                        run_id=record.run_id,
+                        probe_name=record.probe_name,
+                        probe_category=record.probe_category,
+                        detector=record.detector,
+                        pass_count=record.pass_count,
+                        fail_count=record.fail_count,
+                        score=record.score,
+                    ))
                     probe_results_count += 1
                 elif entry_type == "attempt":
-                    attempt = parse_attempt_entry(entry, run_id)
-                    session.add(attempt)
+                    record = parse_attempt_entry(entry, run_id)
+                    session.add(Attempt(
+                        run_id=record.run_id,
+                        probe_name=record.probe_name,
+                        prompt=record.prompt,
+                        response=record.response,
+                        detector_outcome=record.detector_outcome,
+                    ))
                     attempts_count += 1
                 else:
                     skipped_count += 1

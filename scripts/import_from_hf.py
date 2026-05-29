@@ -34,7 +34,7 @@ import argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from glokta.config import settings
-from glokta.hf_sync import import_all
+from glokta.infrastructure.hf.sync import import_all
 
 
 def main() -> None:

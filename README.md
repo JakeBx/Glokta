@@ -66,20 +66,32 @@ glokta/
 │   └── import_from_hf.py       # Import HuggingFace dataset → DB (idempotent merge)
 ├── src/glokta/
 │   ├── config.py               # Pydantic Settings (env vars)
-│   ├── database.py             # SQLAlchemy engine + SessionLocal, init_db()
-│   ├── models/                 # SQLAlchemy ORM models
-│   ├── schemas/                # Pydantic request/response schemas
 │   ├── api/
 │   │   ├── app.py              # FastAPI app factory
-│   │   └── routers/            # health, models, runs, leaderboard
-│   ├── ingest/
-│   │   └── jsonl_parser.py     # garak JSONL → DB
+│   │   ├── deps.py             # Dependency injection (database session)
+│   │   ├── routers/            # health, models, runs, leaderboard
+│   │   └── schemas/            # Pydantic request/response schemas
+│   ├── application/            # Business logic services
+│   │   ├── ingest.py           # garak JSONL → DB parsing
+│   │   ├── leaderboard.py      # Leaderboard query logic
+│   │   └── scan_service.py     # Core scanning orchestration
+│   ├── domain/                 # Pure business entities
+│   │   └── risks.py            # Risk category definitions and pass rate calculations
+│   ├── infrastructure/         # External integrations
+│   │   ├── db/
+│   │   │   ├── session.py      # SQLAlchemy engine, session factory, init_db()
+│   │   │   ├── orm.py          # SQLAlchemy ORM models
+│   │   │   └── repos.py        # Repository pattern for common queries
+│   │   ├── garak/
+│   │   │   └── runner.py       # Subprocess wrapper for garak CLI
+│   │   ├── hf/
+│   │   │   ├── client.py       # HuggingFace model discovery
+│   │   │   └── sync.py         # HF dataset import/export
+│   │   └── openrouter/
+│   │       └── client.py       # OpenRouter model catalogue + cost estimation
 │   ├── pipeline/
-│   │   ├── flows.py            # Prefect flows + pure business logic
+│   │   ├── flows.py            # Prefect flows + thin adapter over application services
 │   │   └── serve.py            # Standalone serve entrypoint (no Prefect Server)
-│   ├── worker/
-│   │   ├── garak_runner.py     # Subprocess wrapper for garak CLI
-│   │   └── openrouter_client.py # OpenRouter model catalogue + cost estimation
 │   └── frontend/
 │       └── gradio_app.py       # Gradio dashboard
 ├── docker/

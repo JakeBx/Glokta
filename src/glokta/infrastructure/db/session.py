@@ -2,7 +2,7 @@
 
 import time
 import logging
-from sqlalchemy import create_engine, exc as sa_exc, text, inspect
+from sqlalchemy import Enum as SAEnum, create_engine, exc as sa_exc, text, inspect
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from glokta.config import settings
@@ -119,16 +119,38 @@ def migrate_db() -> None:
     Uses PostgreSQL's ``ADD COLUMN IF NOT EXISTS`` so it is safe to call
     repeatedly — columns that already exist are silently skipped.
 
-    This handles the common case where the codebase has added new nullable
-    columns to an existing model (e.g. community-run metadata on ``runs``)
-    without a full migration tool.  It is NOT a replacement for Alembic; it
-    only ever adds columns, never drops or alters existing ones.
+    For NOT NULL columns with a scalar Python-side default, the DDL includes
+    a DEFAULT clause so the statement succeeds on non-empty tables.
+
+    This is NOT a replacement for Alembic; it only ever adds columns, never
+    drops or alters existing ones.  Removed ORM columns are left as inert
+    orphans in the database.
 
     Call after ``init_db()`` to bring an older live database up to the
     current schema.
     """
     insp = inspect(engine)
     with engine.begin() as conn:
+        # Ensure any named enum types referenced by ORM columns exist before we
+        # attempt ADD COLUMN — on existing databases create_all() skips tables
+        # that already exist, so it never emits CREATE TYPE for new enums that
+        # belong to those tables.
+        seen_enum_names: set[str] = set()
+        for table in Base.metadata.sorted_tables:
+            for col in table.columns:
+                if isinstance(col.type, SAEnum) and getattr(col.type, "name", None):
+                    enum_name = col.type.name
+                    if enum_name not in seen_enum_names:
+                        seen_enum_names.add(enum_name)
+                        values_sql = ", ".join(f"'{v}'" for v in col.type.enums)
+                        conn.execute(text(
+                            f"DO $$ BEGIN "
+                            f"CREATE TYPE {enum_name} AS ENUM ({values_sql}); "
+                            f"EXCEPTION WHEN duplicate_object THEN NULL; "
+                            f"END $$"
+                        ))
+                        log.debug("migrate_db: ensured enum type %s", enum_name)
+
         for table in Base.metadata.sorted_tables:
             if not insp.has_table(table.name):
                 # Table doesn't exist yet — init_db() handles creation.
@@ -140,9 +162,16 @@ def migrate_db() -> None:
                 # Compile the column type to its SQL DDL string for this dialect.
                 col_type = col.type.compile(dialect=engine.dialect)
                 nullable_clause = "NULL" if col.nullable else "NOT NULL"
+                # For NOT NULL columns with a scalar default, include DEFAULT so
+                # the ADD COLUMN succeeds when the table already has rows.
+                default_clause = ""
+                if not col.nullable and col.default is not None:
+                    arg = col.default.arg
+                    if isinstance(arg, (str, int, float)):
+                        default_clause = f" DEFAULT '{arg}'"
                 stmt = text(
                     f'ALTER TABLE "{table.name}" ADD COLUMN IF NOT EXISTS '
-                    f'"{col.name}" {col_type} {nullable_clause}'
+                    f'"{col.name}" {col_type} {nullable_clause}{default_clause}'
                 )
                 log.info("migrate_db: adding missing column %s.%s", table.name, col.name)
                 conn.execute(stmt)

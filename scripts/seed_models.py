@@ -23,8 +23,8 @@ from datetime import date
 # Allow running from repo root without installing
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from glokta.database import SessionLocal, init_db
-from glokta.models import Model, ProbeRunQueue, Run
+from glokta.infrastructure.db.session import SessionLocal, init_db
+from glokta.infrastructure.db.orm import Model, ProbeRunQueue, Run
 
 # Current OpenRouter free-tier model catalogue (verified April 2026)
 # Format: (name, provider, version)
