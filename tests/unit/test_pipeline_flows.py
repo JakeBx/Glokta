@@ -380,3 +380,38 @@ class TestExecuteScan:
         env_overrides = mock_garak.call_args.args[1]
         assert "OPENROUTER_API_KEY" in env_overrides
         assert "HF_TOKEN" not in env_overrides
+
+    def test_execute_scan_updates_model_last_scan_at(self, db_session):
+        """After a successful scan, model.last_scan_at is set to a non-None datetime."""
+        from glokta.pipeline.flows import _execute_scan
+
+        model = _seed_model(db_session, "openrouter/a/b")
+        run = _seed_run(db_session, model, "running")
+        ingest_result = IngestResult(probe_results_count=5, attempts_count=20, skipped_count=0)
+
+        with patch("glokta.application.scan_service.build_garak_config", return_value={}):
+            with patch("glokta.application.scan_service.run_garak", return_value="/tmp/out.jsonl"):
+                with patch("glokta.application.scan_service.ingest_jsonl_file", return_value=ingest_result):
+                    with patch("glokta.application.scan_service.compute_remaining_probes", return_value=["dan.Dan_11_0"]):
+                        _execute_scan(str(run.id), model.name, [], db_session)
+
+        db_session.refresh(model)
+        assert model.last_scan_at is not None
+
+
+class TestProcessPendingRunDlq:
+    def test_writes_dlq_entry_on_scan_failure(self, db_session):
+        """When scan_fn raises, a ScanDlq entry with reason='scan_failed' is written."""
+        from glokta.pipeline.flows import _process_pending_runs
+        from glokta.infrastructure.db.orm import ScanDlq
+
+        model = _seed_model(db_session, "test/model-dlq-1")
+        run = _seed_run(db_session, model, "pending")
+
+        mock_scan = MagicMock(side_effect=RuntimeError("garak failed"))
+        _process_pending_runs(db_session, mock_scan)
+
+        entry = db_session.query(ScanDlq).filter_by(model_id=model.id).first()
+        assert entry is not None
+        assert entry.reason == "scan_failed"
+        assert entry.run_id == run.id

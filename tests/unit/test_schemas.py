@@ -47,14 +47,6 @@ def test_model_create_version_is_optional():
     assert model.version is None
 
 
-def test_model_create_is_active_defaults_to_true():
-    """ModelCreate.is_active defaults to True."""
-    from glokta.api.schemas import ModelCreate
-
-    model = ModelCreate(name="test-model", provider="test", snapshot_date=date.today())
-    assert model.is_active is True
-
-
 def test_model_response_from_orm(db_session):
     """ModelResponse.model_validate() succeeds on a persisted Model ORM instance."""
     from glokta.api.schemas import ModelResponse
@@ -63,7 +55,8 @@ def test_model_response_from_orm(db_session):
         name="orm-test-model",
         provider="orm-provider",
         snapshot_date=date.today(),
-        is_active=True,
+        source="openrouter",
+        status="active",
     )
     db_session.add(orm_obj)
     db_session.flush()
@@ -71,7 +64,8 @@ def test_model_response_from_orm(db_session):
     response = ModelResponse.model_validate(orm_obj)
     assert response.name == "orm-test-model"
     assert response.provider == "orm-provider"
-    assert response.is_active is True
+    assert response.source == "openrouter"
+    assert response.status == "active"
 
 
 def test_model_response_id_is_uuid(db_session):
@@ -88,34 +82,6 @@ def test_model_response_id_is_uuid(db_session):
 
     response = ModelResponse.model_validate(orm_obj)
     assert isinstance(response.id, uuid4().__class__)
-
-
-# --- RunCreate / RunResponse ---
-
-
-def test_run_create_requires_model_id():
-    """RunCreate raises ValidationError when model_id is missing."""
-    from glokta.api.schemas import RunCreate
-
-    with pytest.raises(ValidationError) as exc_info:
-        RunCreate(probe_categories=["test"])
-    assert "model_id" in str(exc_info.value)
-
-
-def test_run_create_probe_categories_defaults_to_empty_list():
-    """RunCreate.probe_categories defaults to []."""
-    from glokta.api.schemas import RunCreate
-
-    run = RunCreate(model_id=uuid4())
-    assert run.probe_categories == []
-
-
-def test_run_create_model_id_must_be_uuid():
-    """RunCreate raises ValidationError when model_id is not a valid UUID."""
-    from glokta.api.schemas import RunCreate
-
-    with pytest.raises(ValidationError):
-        RunCreate(model_id="not-a-uuid")
 
 
 def test_run_response_from_orm(db_session):
@@ -380,7 +346,6 @@ def test_all_schemas_importable():
         ModelBase,
         ModelCreate,
         ModelResponse,
-        RunCreate,
         RunResponse,
         RunStatus,
         ProbeResultResponse,
@@ -390,11 +355,9 @@ def test_all_schemas_importable():
         ModelDetailResponse,
     )
 
-    # Verify they exist and are not None
     assert ModelBase is not None
     assert ModelCreate is not None
     assert ModelResponse is not None
-    assert RunCreate is not None
     assert RunResponse is not None
     assert RunStatus is not None
     assert ProbeResultResponse is not None

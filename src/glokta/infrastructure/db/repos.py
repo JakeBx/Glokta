@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from glokta.infrastructure.db.orm import Model, Run, ProbeResult
+from glokta.infrastructure.db.orm import Model, ProbeResult, Run, ScanDlq
 
 
 class ModelRepository:
@@ -32,8 +32,24 @@ class ModelRepository:
             self._db.flush()
         return model
 
+    def upsert_from_source(self, name: str, provider: str, source: str) -> Model:
+        """Find model by name or create it with the given source; always set status=active."""
+        model = self.find_by_name(name)
+        if model is None:
+            model = Model(
+                name=name,
+                provider=provider,
+                source=source,
+                snapshot_date=date.today(),
+            )
+            self._db.add(model)
+        else:
+            model.status = "active"
+        self._db.flush()
+        return model
+
     def list_active(self) -> list[Model]:
-        return self._db.query(Model).filter(Model.is_active.is_(True)).order_by(Model.name).all()
+        return self._db.query(Model).filter(Model.status == "active").order_by(Model.name).all()
 
 
 class RunRepository:
@@ -43,26 +59,10 @@ class RunRepository:
     def find_by_id(self, run_id: uuid.UUID) -> Run | None:
         return self._db.query(Run).filter(Run.id == run_id).first()
 
-    def find_verified_for(self, community_run_id: uuid.UUID) -> Run | None:
-        return (
-            self._db.query(Run)
-            .filter(
-                Run.source_community_run_id == community_run_id,
-                Run.triggered_by == "verified",
-            )
-            .first()
-        )
-
-    def list_all(
-        self,
-        status: str | None = None,
-        verification_requested: bool | None = None,
-    ) -> list[Run]:
+    def list_all(self, status: str | None = None) -> list[Run]:
         query = self._db.query(Run).order_by(Run.created_at.desc())
         if status is not None:
             query = query.filter(Run.status == status)
-        if verification_requested is True:
-            query = query.filter(Run.verification_requested_at.isnot(None))
         return query.all()
 
     def pending_one_locked(self) -> Run | None:
@@ -110,3 +110,36 @@ class ProbeResultRepository:
             .distinct()
             .all()
         }
+
+
+class ScanDlqRepository:
+    def __init__(self, session: Session) -> None:
+        self._db = session
+
+    def create(
+        self,
+        model_id: uuid.UUID,
+        reason: str,
+        run_id: uuid.UUID | None = None,
+        missing_categories: str | None = None,
+        error_message: str | None = None,
+    ) -> ScanDlq:
+        entry = ScanDlq(
+            model_id=model_id,
+            run_id=run_id,
+            reason=reason,
+            missing_categories=missing_categories,
+            error_message=error_message,
+        )
+        self._db.add(entry)
+        self._db.flush()
+        return entry
+
+    def recent_for_model(self, model_id: uuid.UUID, limit: int = 10) -> list[ScanDlq]:
+        return (
+            self._db.query(ScanDlq)
+            .filter(ScanDlq.model_id == model_id)
+            .order_by(ScanDlq.created_at.desc())
+            .limit(limit)
+            .all()
+        )

@@ -4,23 +4,24 @@ import io
 import json
 import logging
 import tempfile
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
 import yaml
+from sqlalchemy import or_ as sa_or_
 from sqlalchemy.orm import Session
 
 from glokta.config import settings
 from glokta.application.ingest import ingest_jsonl_file
 from glokta.infrastructure.db.orm import Model, Run
-from glokta.infrastructure.db.repos import ModelRepository, ProbeResultRepository, RunRepository
+from glokta.infrastructure.db.repos import ModelRepository, ProbeResultRepository, RunRepository, ScanDlqRepository
 from glokta.infrastructure.garak.runner import (
     DEFAULT_PROBE_CATEGORIES,
     build_garak_config,
     compute_remaining_probes,
     run_garak,
 )
-from glokta.domain.risks import ACTIVE_RISKS
 from glokta.infrastructure.hf.client import fetch_top_hf_models
 from glokta.infrastructure.openrouter.client import fetch_top_models
 
@@ -66,13 +67,21 @@ def process_pending_run(db: Session, scan_fn: Callable) -> None:
         run.status = "complete"
         run.completed_at = datetime.now(timezone.utc)
         db.commit()
-    except Exception:
+    except Exception as exc:
         # Re-fetch to see the current DB state — the task may have written "complete"
         # on a successful retry before the exception propagated here (defensive guard).
         run = run_repo.find_by_id(run.id)
         if run.status != "complete":
             run.status = "failed"
             run.completed_at = datetime.now(timezone.utc)
+            db.commit()
+            write_dlq_entry(
+                db,
+                model_id=run.model_id,
+                reason="scan_failed",
+                run_id=run.id,
+                error_message=str(exc),
+            )
             db.commit()
 
 
@@ -155,6 +164,10 @@ def execute_scan(
 
         source = io.StringIO(run.raw_output) if run.raw_output else jsonl_path
         result = ingest_jsonl_file(source, run_id, db)
+
+        model = ModelRepository(db).find_by_id(run.model_id)
+        if model is not None:
+            model.last_scan_at = datetime.now(timezone.utc)
         db.commit()
 
     if result.probe_results_count == 0 and result.attempts_count == 0:
@@ -173,191 +186,129 @@ def execute_scan(
     }
 
 
-def queue_models_from_source(
+def write_dlq_entry(
     db: Session,
-    model_dicts: list[dict],
-    prefix: str,
-    staleness_cutoff: datetime,
-) -> tuple[int, int]:
-    """Create pending runs for stale models from a single discovery source.
+    model_id: uuid.UUID,
+    reason: str,
+    run_id: uuid.UUID | None = None,
+    missing_categories: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    """Write a dead-letter queue entry for a failed or incomplete scan."""
+    logger.warning(
+        "DLQ: model=%s reason=%s run=%s", model_id, reason, run_id
+    )
+    ScanDlqRepository(db).create(
+        model_id=model_id,
+        reason=reason,
+        run_id=run_id,
+        missing_categories=missing_categories,
+        error_message=error_message,
+    )
 
-    Returns (queued_count, skipped_count).
+
+def sync_model_statuses(
+    db: Session,
+    openrouter_models: list[dict],
+    hf_models: list[dict],
+) -> dict:
+    """Upsert top models from OpenRouter and HF into the DB; archive models that
+    dropped off the top list.
+
+    Returns dict with upserted and archived counts.
     """
     model_repo = ModelRepository(db)
-    queued = 0
-    skipped = 0
+    discovered_names: set[str] = set()
 
-    for model_data in model_dicts:
+    if not openrouter_models and not hf_models:
+        logger.warning(
+            "sync_model_statuses: no models returned from any source — "
+            "skipping archive step to avoid incorrectly archiving all models"
+        )
+        return {"upserted": 0, "archived": 0}
+
+    for model_data in openrouter_models:
         raw_id = model_data.get("id", "")
         if not raw_id:
             continue
+        name = raw_id if raw_id.startswith("openrouter/") else f"openrouter/{raw_id}"
+        parts = name.split("/")
+        provider = parts[1] if len(parts) > 1 else name
+        model_repo.upsert_from_source(name, provider, "openrouter")
+        discovered_names.add(name)
 
-        model_name = raw_id if raw_id.startswith(prefix) else f"{prefix}{raw_id}"
-
-        model = model_repo.find_by_name(model_name)
-        if model is None:
-            parts = model_name.split("/")
-            provider = parts[1] if len(parts) > 1 else model_name
-            model = Model(
-                name=model_name,
-                provider=provider,
-                snapshot_date=date.today(),
-            )
-            db.add(model)
-            db.flush()
-
-        active = (
-            db.query(Run)
-            .filter(Run.model_id == model.id, Run.status.in_(["pending", "running"]))
-            .first()
-        )
-        if active:
-            skipped += 1
+    for model_data in hf_models:
+        raw_id = model_data.get("id", "")
+        if not raw_id:
             continue
+        name = raw_id if raw_id.startswith("huggingface/") else f"huggingface/{raw_id}"
+        parts = name.split("/")
+        provider = parts[1] if len(parts) > 1 else name
+        model_repo.upsert_from_source(name, provider, "hf")
+        discovered_names.add(name)
 
-        latest = (
-            db.query(Run)
-            .filter(Run.model_id == model.id, Run.status == "complete")
-            .order_by(Run.completed_at.desc())
-            .first()
+    upserted = len(discovered_names)
+
+    # Archive non-manual active models no longer in the top list.
+    # Only archive from a source when that source returned results — if a fetch
+    # fails and returns [] we must not archive all models from that source.
+    active_source_clauses = []
+    if openrouter_models:
+        active_source_clauses.append(Model.source == "openrouter")
+    if hf_models:
+        active_source_clauses.append(Model.source == "hf")
+
+    archived_count = 0
+    if active_source_clauses:
+        to_archive = (
+            db.query(Model)
+            .filter(
+                sa_or_(*active_source_clauses),
+                Model.status == "active",
+                Model.name.notin_(discovered_names),
+            )
+            .all()
         )
+        for model in to_archive:
+            model.status = "archived"
+        archived_count = len(to_archive)
 
-        if latest and latest.completed_at:
-            completed = latest.completed_at
-            if completed.tzinfo is None:
-                completed = completed.replace(tzinfo=timezone.utc)
-            if completed >= staleness_cutoff:
-                skipped += 1
-                continue
-
-        run = Run(model_id=model.id, triggered_by="scheduled", status="pending")
-        db.add(run)
-        db.commit()
-        queued += 1
-
-    return queued, skipped
+    db.commit()
+    logger.info("sync_model_statuses: upserted=%d archived=%d", upserted, archived_count)
+    return {"upserted": upserted, "archived": archived_count}
 
 
-def discover_and_queue(
-    db: Session,
-    api_key: str,
-    top_n: int,
-    max_scan_cost_usd: float,
-    scan_ttl_days: int,
-    hf_token: str = "",
-    hf_top_n: int = 0,
-) -> dict:
-    """Fetch top models from OpenRouter (and optionally HuggingFace) and create
-    pending runs for stale ones.
+def queue_stale_models(db: Session, scan_ttl_days: int) -> dict:
+    """Create pending runs for all ACTIVE models where last_scan_at is null or past TTL.
 
     Returns dict with queued and skipped counts.
     """
     staleness_cutoff = datetime.now(timezone.utc) - timedelta(days=scan_ttl_days)
-    total_queued = 0
-    total_skipped = 0
+    active_models = ModelRepository(db).list_active()
+    queued = 0
+    skipped = 0
 
-    or_models = fetch_top_models(
-        api_key=api_key,
-        top_n=top_n,
-        max_scan_cost_usd=max_scan_cost_usd,
-    )
-    q, s = queue_models_from_source(db, or_models, "openrouter/", staleness_cutoff)
-    total_queued += q
-    total_skipped += s
+    for model in active_models:
+        active_run = (
+            db.query(Run)
+            .filter(Run.model_id == model.id, Run.status.in_(["pending", "running"]))
+            .first()
+        )
+        if active_run:
+            skipped += 1
+            continue
 
-    if hf_token and hf_top_n > 0:
-        hf_models = fetch_top_hf_models(hf_token=hf_token, top_n=hf_top_n)
-        q, s = queue_models_from_source(db, hf_models, "huggingface/", staleness_cutoff)
-        total_queued += q
-        total_skipped += s
-
-    logger.info("discover_and_queue: queued=%d, skipped=%d", total_queued, total_skipped)
-    return {"queued": total_queued, "skipped": total_skipped}
-
-
-def queue_coverage_remediation(db: Session) -> dict:
-    """Find all models whose latest complete run is missing one or more active risk
-    categories, and queue a targeted run for the missing categories only.
-
-    Returns a summary dict with counts and per-model details for verbose logging.
-    """
-    active_set = set(ACTIVE_RISKS)
-    run_repo = RunRepository(db)
-    pr_repo = ProbeResultRepository(db)
-
-    models_with_runs = (
-        db.query(Model)
-        .join(Run, Run.model_id == Model.id)
-        .filter(Run.status == "complete")
-        .distinct()
-        .all()
-    )
-
-    queued: list[dict] = []
-    skipped_active: list[str] = []
-    skipped_complete: list[str] = []
-    errors: list[str] = []
-
-    for model in models_with_runs:
-        try:
-            latest = (
-                db.query(Run)
-                .filter(Run.model_id == model.id, Run.status == "complete")
-                .order_by(Run.completed_at.desc())
-                .first()
-            )
-            if not latest:
+        if model.last_scan_at is not None:
+            scan_time = model.last_scan_at
+            if scan_time.tzinfo is None:
+                scan_time = scan_time.replace(tzinfo=timezone.utc)
+            if scan_time >= staleness_cutoff:
+                skipped += 1
                 continue
 
-            covered = pr_repo.covered_categories_for(latest.id)
-            missing = sorted(active_set - covered)
-
-            if not missing:
-                skipped_complete.append(model.name)
-                continue
-
-            active = (
-                db.query(Run)
-                .filter(Run.model_id == model.id, Run.status.in_(["pending", "running"]))
-                .first()
-            )
-            if active:
-                skipped_active.append(model.name)
-                logger.info(
-                    "COVERAGE-REMEDIATION | SKIP | %s | already has active run %s",
-                    model.name, str(active.id),
-                )
-                continue
-
-            remediation_run = Run(
-                model_id=model.id,
-                triggered_by="scheduled",
-                status="pending",
-                probe_categories_json=json.dumps(missing),
-            )
-            db.add(remediation_run)
-            db.flush()
-
-            queued.append({
-                "model": model.name,
-                "run_id": str(remediation_run.id),
-                "missing_categories": missing,
-                "covered_categories": sorted(covered),
-            })
-            logger.info(
-                "COVERAGE-REMEDIATION | QUEUED | %s | run=%s | missing=%s",
-                model.name, str(remediation_run.id), missing,
-            )
-
-        except Exception as exc:
-            errors.append(f"{model.name}: {exc}")
-            logger.error("COVERAGE-REMEDIATION | ERROR | %s | %s", model.name, exc)
+        db.add(Run(model_id=model.id, triggered_by="scheduled", status="pending"))
+        queued += 1
 
     db.commit()
-
-    return {
-        "queued": queued,
-        "skipped_already_active": skipped_active,
-        "skipped_full_coverage": skipped_complete,
-        "errors": errors,
-    }
+    logger.info("queue_stale_models: queued=%d skipped=%d", queued, skipped)
+    return {"queued": queued, "skipped": skipped}

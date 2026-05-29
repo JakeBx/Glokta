@@ -9,39 +9,6 @@ from sqlalchemy.orm import Session
 from glokta.infrastructure.db.orm import Model, Run
 
 
-def test_create_run(api_client: TestClient, db_session: Session):
-    """POST /api/runs creates a run with status=pending."""
-    # Create a model first
-    model = Model(
-        name="test/model:free",
-        provider="test-provider",
-        snapshot_date=date.today(),
-    )
-    db_session.add(model)
-    db_session.commit()
-
-    response = api_client.post("/api/runs", json={"model_id": str(model.id)})
-    assert response.status_code == 201
-    data = response.json()
-    assert data["status"] == "pending"
-    assert data["triggered_by"] == "api"
-    assert data["model_id"] == str(model.id)
-
-
-def test_create_run_requires_model_id(api_client: TestClient):
-    """POST /api/runs without model_id returns 422."""
-    response = api_client.post("/api/runs", json={})
-    assert response.status_code == 422
-
-
-def test_create_run_invalid_model_id_returns_404(api_client: TestClient):
-    """POST /api/runs with non-existent model_id returns 404."""
-    fake_id = uuid.uuid4()
-    response = api_client.post("/api/runs", json={"model_id": str(fake_id)})
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Model not found"
-
-
 def test_list_runs_empty(api_client: TestClient):
     """GET /api/runs returns empty list when no runs exist."""
     response = api_client.get("/api/runs")

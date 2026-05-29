@@ -56,7 +56,7 @@ def import_models(session, rows: list[dict], dry_run: bool) -> tuple[int, int]:
                 provider=row["provider"],
                 version=row.get("version"),
                 snapshot_date=_parse_date(row.get("snapshot_date")),
-                is_active=row.get("is_active", True),
+                source="manual",
                 created_at=_parse_datetime(row.get("created_at")),
             ))
         inserted += 1
@@ -78,19 +78,13 @@ def import_runs(session, rows: list[dict], dry_run: bool) -> tuple[int, int]:
             session.add(Run(
                 id=_parse_uuid(row["id"]),
                 model_id=_parse_uuid(row["model_id"]),
-                triggered_by=row.get("triggered_by", "import"),
+                triggered_by=row.get("triggered_by", "manual"),
                 status=row.get("status", "complete"),
                 started_at=_parse_datetime(row.get("started_at")),
                 completed_at=_parse_datetime(row.get("completed_at")),
                 created_at=_parse_datetime(row.get("created_at")),
                 garak_version=row.get("garak_version"),
-                scanned_at=_parse_datetime(row.get("scanned_at")),
-                submitted_by=row.get("submitted_by"),
                 garak_config=row.get("garak_config"),
-                config_hash=row.get("config_hash"),
-                jsonl_manifest_hash=row.get("jsonl_manifest_hash"),
-                verification_requested_at=_parse_datetime(row.get("verification_requested_at")),
-                source_community_run_id=_parse_uuid(row.get("source_community_run_id")),
             ))
         inserted += 1
     if not dry_run:

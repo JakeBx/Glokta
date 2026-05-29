@@ -58,3 +58,47 @@ def test_get_model_not_found(api_client: TestClient):
     response = api_client.get(f"/api/models/{unknown_id}")
     assert response.status_code == 404
     assert response.json()["detail"] == "Model not found"
+
+
+def test_list_models_only_returns_active(api_client: TestClient, db_session: Session):
+    """GET /api/models returns only status='active' models, not archived ones."""
+    active_model = Model(
+        name="active-model",
+        provider="prov",
+        snapshot_date=date.today(),
+        status="active",
+    )
+    archived_model = Model(
+        name="archived-model",
+        provider="prov",
+        snapshot_date=date.today(),
+        status="archived",
+    )
+    db_session.add_all([active_model, archived_model])
+    db_session.commit()
+
+    response = api_client.get("/api/models")
+    assert response.status_code == 200
+    names = [m["name"] for m in response.json()]
+    assert "active-model" in names
+    assert "archived-model" not in names
+
+
+def test_model_response_includes_source_and_status(api_client: TestClient, db_session: Session):
+    """GET /api/models returns source and status fields in each model."""
+    model = Model(
+        name="source-test-model",
+        provider="prov",
+        snapshot_date=date.today(),
+        source="openrouter",
+        status="active",
+    )
+    db_session.add(model)
+    db_session.commit()
+
+    response = api_client.get("/api/models")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["source"] == "openrouter"
+    assert data[0]["status"] == "active"

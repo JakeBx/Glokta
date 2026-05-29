@@ -1,10 +1,9 @@
-"""SQLAlchemy ORM models — all five tables consolidated."""
+"""SQLAlchemy ORM models — all tables consolidated."""
 
 import uuid
 from datetime import date, datetime, timezone
 
 from sqlalchemy import (
-    Boolean,
     Date,
     DateTime,
     Enum,
@@ -61,7 +60,19 @@ class Model(Base):
     provider: Mapped[str] = mapped_column(String(255), nullable=False)
     version: Mapped[str | None] = mapped_column(String(255), nullable=True)
     snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    source: Mapped[str] = mapped_column(
+        Enum("openrouter", "hf", "manual", name="model_source"),
+        nullable=False,
+        default="manual",
+    )
+    status: Mapped[str] = mapped_column(
+        Enum("active", "archived", name="model_status"),
+        nullable=False,
+        default="active",
+    )
+    last_scan_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False,
@@ -100,7 +111,7 @@ class Run(Base):
     triggered_by: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
-        default="api",
+        default="scheduled",
     )
     # Per-run overrides (NULL = use global settings)
     probe_categories_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -124,19 +135,6 @@ class Run(Base):
     garak_version: Mapped[str | None] = mapped_column(String(255), nullable=True)
     garak_config: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_output: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Community run reproducibility metadata
-    scanned_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    submitted_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    config_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    jsonl_manifest_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    verification_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-    # Self-referential FK: on a verified Run, points to the community Run that prompted it
-    source_community_run_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUIDType(),
-        ForeignKey("runs.id"),
-        nullable=True,
-    )
 
     model: Mapped["Model"] = relationship("Model", back_populates="runs")
     probe_results: Mapped[list["ProbeResult"]] = relationship(
@@ -241,4 +239,38 @@ class ProbeRunQueue(Base):
             "probe_category",
             "status",
         ),
+    )
+
+
+class ScanDlq(Base):
+    """Dead-letter queue for failed scans and models with incomplete probe coverage."""
+
+    __tablename__ = "scan_dlq"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    model_id: Mapped[uuid.UUID] = mapped_column(
+        UUIDType(),
+        ForeignKey("models.id"),
+        nullable=False,
+    )
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUIDType(),
+        ForeignKey("runs.id"),
+        nullable=True,
+    )
+    reason: Mapped[str] = mapped_column(
+        Enum("scan_failed", "incomplete_coverage", name="dlq_reason"),
+        nullable=False,
+    )
+    missing_categories: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        Index("ix_scan_dlq_model_id", "model_id"),
+        Index("ix_scan_dlq_run_id", "run_id"),
     )

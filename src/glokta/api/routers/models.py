@@ -14,8 +14,8 @@ router = APIRouter()
 
 @router.get("/models", response_model=list[ModelResponse])
 def list_models(db: Session = Depends(get_db)) -> list[Model]:
-    """List all active models, ordered by name."""
-    models = db.query(Model).order_by(Model.name).all()
+    """List all active (non-archived) models, ordered by name."""
+    models = db.query(Model).filter(Model.status == "active").order_by(Model.name).all()
     return models
 
 
