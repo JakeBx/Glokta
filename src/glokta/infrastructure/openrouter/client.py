@@ -22,9 +22,6 @@ logger = logging.getLogger(__name__)
 
 
 # Garak scan cost assumptions — must match src/glokta/config.py soft_probe_prompt_cap.
-# These values are used to compute an expected USD cost per full scan so we can filter
-# out models whose pricing would blow a per-model budget. The numbers are intentionally
-# conservative; a real scan varies by ±30%.
 _N_ACTIVE_PROBES = 91           # probes enabled by default in garak 0.14.1
 _PROMPTS_PER_PROBE_CAP = 50     # glokta soft_probe_prompt_cap
 _MULTI_TURN_OVERHEAD = 1.2      # jailbreak/tap/atkgen probes add ~20% extra attempts
@@ -33,12 +30,7 @@ _TOKENS_OUT_PER_ATTEMPT = 300   # median output length (1 generation per prompt)
 
 
 def estimate_scan_cost_usd(pricing: dict) -> float:
-    """Estimate USD cost of a full garak scan for a model given its OpenRouter pricing.
-
-    Pricing values are per-token (string decimals). BYOK models use "-1" for both
-    prompt and completion; those can't be priced so we return +inf to guarantee
-    they're excluded by any finite cap.
-    """
+    """Estimate USD cost of a full garak scan for a model given its OpenRouter pricing."""
     prompt_price = float(pricing.get("prompt", 0))
     completion_price = float(pricing.get("completion", 0))
     if prompt_price < 0 or completion_price < 0:
@@ -51,18 +43,11 @@ def estimate_scan_cost_usd(pricing: dict) -> float:
 
 
 def _fetch_rankings_data(timeout: float) -> list[dict]:
-    """Scrape the `rankingData` array from the rankings page.
-
-    The live HTML embeds the array as JSON-in-a-JS-string with backslash-escaped
-    quotes (e.g. `\\"rankingData\\":[{\\"date\\":...}]`). If fetched with an
-    `rsc: 1` header the payload comes back unescaped. We handle both, and we
-    also need to unescape the per-record fields before JSON-parsing.
-    """
+    """Scrape the `rankingData` array from the rankings page."""
     response = httpx.get(settings.openrouter_rankings_url, timeout=timeout)
     response.raise_for_status()
     text = response.text
 
-    # Locate the start of the rankingData array in either form.
     start = text.find('\\"rankingData\\":[')
     escaped = start != -1
     if not escaped:
@@ -71,15 +56,13 @@ def _fetch_rankings_data(timeout: float) -> list[dict]:
             logger.warning("No rankingData array found on OpenRouter rankings page")
             return []
 
-    # Scan forward to find the matching closing bracket, respecting nested arrays.
-    # Skip past the opening '[':
     open_bracket = text.index('[', start)
     depth = 1
     pos = open_bracket + 1
     while depth > 0 and pos < len(text):
         ch = text[pos]
         if escaped and ch == '\\' and pos + 1 < len(text) and text[pos + 1] in '[]"\\':
-            pos += 2  # skip escape sequence
+            pos += 2
             continue
         if ch == '[':
             depth += 1
@@ -89,7 +72,6 @@ def _fetch_rankings_data(timeout: float) -> list[dict]:
 
     array_body = text[open_bracket + 1 : pos - 1]
     if escaped:
-        # Collapse the backslash-escapes inside the JS string literal.
         array_body = array_body.replace('\\"', '"').replace('\\\\', '\\')
 
     records = []
@@ -102,9 +84,7 @@ def _fetch_rankings_data(timeout: float) -> list[dict]:
 
 
 def _rank_models_by_token_volume(records: list[dict]) -> list[str]:
-    """Aggregate ranking records across dates/variants, return permaslugs sorted
-    by total (prompt + completion) tokens descending.
-    """
+    """Aggregate ranking records, return permaslugs sorted by total tokens descending."""
     totals: dict[str, int] = defaultdict(int)
     for r in records:
         slug = r.get("model_permaslug")
@@ -135,15 +115,6 @@ def fetch_top_models(
 ) -> list[dict]:
     """Return up to `top_n` OpenRouter models ranked by weekly token volume,
     filtered by per-model scan cost.
-
-    Args:
-        api_key: OpenRouter API key (used for catalog auth; rankings page is public).
-        top_n: Maximum number of models to return.
-        max_scan_cost_usd: Drop models whose estimated full-scan cost exceeds this
-            amount. Default $10. Pass None to disable.
-
-    Each returned dict is the raw catalog entry (includes `id`, `pricing`,
-    `canonical_slug`, etc.) in ranked order.
     """
     ranking_records = _fetch_rankings_data(timeout)
     ranked_slugs = _rank_models_by_token_volume(ranking_records)
@@ -153,7 +124,7 @@ def fetch_top_models(
     for slug in ranked_slugs:
         model = catalog_by_slug.get(slug)
         if model is None:
-            continue  # ranked model no longer in catalog
+            continue
         if max_scan_cost_usd is not None:
             cost = estimate_scan_cost_usd(model.get("pricing", {}))
             if cost > max_scan_cost_usd:

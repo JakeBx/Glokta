@@ -29,8 +29,8 @@ import argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from glokta.config import settings
-from glokta.database import SessionLocal, init_db, migrate_db
-from glokta.models import Model, Run, ProbeResult
+from glokta.infrastructure.db.session import SessionLocal, init_db, migrate_db
+from glokta.infrastructure.db.orm import Model, Run, ProbeResult
 
 from dotenv import load_dotenv
 

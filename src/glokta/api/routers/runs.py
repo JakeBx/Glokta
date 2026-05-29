@@ -1,9 +1,9 @@
 """Runs API router."""
 
 import hashlib
-import tempfile
 import os
-from datetime import date, datetime, timezone
+import tempfile
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -11,9 +11,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from glokta.api.deps import get_db
-from glokta.ingest.jsonl_parser import ingest_jsonl_file
-from glokta.models import Attempt, Model, Run, ProbeResult
-from glokta.schemas import AttemptResponse, RunCreate, RunResponse, RunSummaryRow, ProbeResultResponse
+from glokta.application.ingest import ingest_jsonl_file
+from glokta.infrastructure.db.orm import Attempt, Model, ProbeResult, Run
+from glokta.infrastructure.db.repos import ModelRepository, RunRepository
+from glokta.api.schemas import AttemptResponse, ProbeResultResponse, RunCreate, RunResponse, RunSummaryRow
 
 router = APIRouter()
 
@@ -22,32 +23,10 @@ def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _upsert_model(db: Session, model_name: str) -> Model:
-    """Return existing Model by name, creating it if absent."""
-    model = db.query(Model).filter(Model.name == model_name).first()
-    if model is None:
-        model = Model(
-            name=model_name,
-            provider=model_name.split("/")[1] if "/" in model_name else model_name,
-            snapshot_date=date.today(),
-        )
-        db.add(model)
-        db.flush()
-    return model
-
-
 def _build_run_response(run: Run, db: Session) -> RunResponse:
-    """Build RunResponse, populating verified_run_id for community runs."""
     response = RunResponse.model_validate(run)
     if run.triggered_by == "community":
-        verified = (
-            db.query(Run)
-            .filter(
-                Run.source_community_run_id == run.id,
-                Run.triggered_by == "verified",
-            )
-            .first()
-        )
+        verified = RunRepository(db).find_verified_for(run.id)
         if verified:
             response.verified_run_id = verified.id
     return response
@@ -56,7 +35,7 @@ def _build_run_response(run: Run, db: Session) -> RunResponse:
 @router.post("/runs", response_model=RunResponse, status_code=201)
 def create_run(run_data: RunCreate, db: Session = Depends(get_db)) -> RunResponse:
     """Create a run record with status='pending'. The pipeline picks it up on next poll."""
-    model = db.query(Model).filter(Model.id == run_data.model_id).first()
+    model = ModelRepository(db).find_by_id(run_data.model_id)
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
 
@@ -86,7 +65,7 @@ async def submit_community_run(
     config_bytes = await config_file.read()
     jsonl_bytes = await jsonl_file.read()
 
-    model = _upsert_model(db, model_name)
+    model = ModelRepository(db).find_or_create(model_name)
 
     run = Run(
         model_id=model.id,
@@ -125,12 +104,7 @@ def list_runs(
     db: Session = Depends(get_db),
 ) -> list[RunResponse]:
     """List runs; optional query params status and verification_requested; ordered by created_at desc."""
-    query = db.query(Run).order_by(Run.created_at.desc())
-    if status is not None:
-        query = query.filter(Run.status == status)
-    if verification_requested is True:
-        query = query.filter(Run.verification_requested_at.isnot(None))
-    runs = query.all()
+    runs = RunRepository(db).list_all(status=status, verification_requested=verification_requested)
     return [RunResponse.model_validate(r) for r in runs]
 
 
@@ -182,7 +156,7 @@ def get_run_attempts(
     db: Session = Depends(get_db),
 ) -> list[AttemptResponse]:
     """Return attempts for a run, optionally filtered by probe_name."""
-    run = db.query(Run).filter(Run.id == run_id).first()
+    run = RunRepository(db).find_by_id(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     query = db.query(Attempt).filter(Attempt.run_id == run_id)
@@ -195,7 +169,7 @@ def get_run_attempts(
 @router.get("/runs/{run_id}/probe-results", response_model=list[ProbeResultResponse])
 def get_run_probe_results(run_id: UUID, db: Session = Depends(get_db)) -> list[ProbeResultResponse]:
     """Return all probe results for a specific run, ordered by probe name."""
-    run = db.query(Run).filter(Run.id == run_id).first()
+    run = RunRepository(db).find_by_id(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     results = (
@@ -210,7 +184,7 @@ def get_run_probe_results(run_id: UUID, db: Session = Depends(get_db)) -> list[P
 @router.get("/runs/{run_id}", response_model=RunResponse)
 def get_run(run_id: UUID, db: Session = Depends(get_db)) -> RunResponse:
     """Get a single run by UUID; 404 if not found. Populates verified_run_id for community runs."""
-    run = db.query(Run).filter(Run.id == run_id).first()
+    run = RunRepository(db).find_by_id(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     return _build_run_response(run, db)
@@ -219,7 +193,7 @@ def get_run(run_id: UUID, db: Session = Depends(get_db)) -> RunResponse:
 @router.post("/runs/{run_id}/request-verification", response_model=RunResponse)
 def request_verification(run_id: UUID, db: Session = Depends(get_db)) -> RunResponse:
     """Mark a community run as requesting verification review."""
-    run = db.query(Run).filter(Run.id == run_id).first()
+    run = RunRepository(db).find_by_id(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     if run.triggered_by != "community":
@@ -236,7 +210,7 @@ def request_verification(run_id: UUID, db: Session = Depends(get_db)) -> RunResp
 @router.post("/runs/{run_id}/verify", response_model=RunResponse, status_code=201)
 def trigger_verified_scan(run_id: UUID, db: Session = Depends(get_db)) -> RunResponse:
     """Create a verified re-scan of a community run that has requested verification."""
-    community_run = db.query(Run).filter(Run.id == run_id).first()
+    community_run = RunRepository(db).find_by_id(run_id)
     if not community_run:
         raise HTTPException(status_code=404, detail="Run not found")
     if community_run.triggered_by != "community":

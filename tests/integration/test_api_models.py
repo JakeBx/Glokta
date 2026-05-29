@@ -6,7 +6,7 @@ from datetime import date
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from glokta.models import Model
+from glokta.infrastructure.db.orm import Model
 
 
 def test_list_models_empty(api_client: TestClient):

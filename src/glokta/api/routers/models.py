@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from glokta.api.deps import get_db
-from glokta.models import Model
-from glokta.schemas import ModelResponse
+from glokta.infrastructure.db.orm import Model
+from glokta.api.schemas import ModelResponse
 
 router = APIRouter()
 

@@ -61,10 +61,8 @@ def _is_hit(detector_outcome: dict | None) -> bool:
 
 
 def _run_assessment(triggered_by: str, min_hits: int) -> int:
-    from glokta.database import SessionLocal, init_db, migrate_db
-    from glokta.models import Run
-    from glokta.models.attempt import Attempt
-    from glokta.models.model import Model
+    from glokta.infrastructure.db.session import SessionLocal, init_db, migrate_db
+    from glokta.infrastructure.db.orm import Run, Attempt, Model
 
     init_db()
     migrate_db()
@@ -92,6 +90,7 @@ def _run_assessment(triggered_by: str, min_hits: int) -> int:
 
     all_prompts = [r.prompt or "" for r in rows]
     hit_prompts = [r.prompt or "" for r in hits]
+    n_prompts = deduplicate_prompts(all_prompts)
     dedup_hits = deduplicate_prompts(hit_prompts)
 
     null_count = sum(1 for r in rows if not r.response or not r.response.strip())
@@ -112,6 +111,7 @@ def _run_assessment(triggered_by: str, min_hits: int) -> int:
     print("=== Glokta Training Dataset Assessment ===")
     print(f"Total training run attempts:  {total_attempts:,}")
     print(f"Total hits (compliant):       {total_hits:,}")
+    print(f"Unique prompts:               {n_prompts:,}")
     print(f"Deduplicated hits:            {dedup_hits:,}")
     print(f"Null/empty response rate:     {null_rate:.1f}%")
     print()

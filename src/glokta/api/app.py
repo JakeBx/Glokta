@@ -6,7 +6,7 @@ import os
 from fastapi import FastAPI
 
 from glokta.api.routers import health, models, runs, leaderboard
-from glokta.database import init_db
+from glokta.infrastructure.db.session import init_db
 
 
 @asynccontextmanager

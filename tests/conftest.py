@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 # Set testing flag BEFORE importing app to prevent DB connection at import time
 os.environ["TESTING"] = "1"
 
-from glokta.database import Base
+from glokta.infrastructure.db.session import Base
 from glokta.api.app import create_app
 from glokta.api.deps import get_db
 

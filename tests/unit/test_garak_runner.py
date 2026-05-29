@@ -9,7 +9,7 @@ class TestBuildGarakConfigHf:
     """build_garak_config HF dispatch — huggingface/ prefix produces HF-specific config."""
 
     def _hf_config(self, model_id: str = "meta-llama/Llama-3.1-8B-Instruct") -> dict:
-        from glokta.worker.garak_runner import build_garak_config
+        from glokta.infrastructure.garak.runner import build_garak_config
         return build_garak_config(
             model_name=f"huggingface/{model_id}",
             probe_categories=["dan"],
@@ -42,7 +42,7 @@ class TestBuildGarakConfigHf:
 
     def test_hf_generator_name_differs_from_openrouter(self):
         """HF and OpenRouter configs use distinct generator names to avoid garak cache collisions."""
-        from glokta.worker.garak_runner import build_garak_config
+        from glokta.infrastructure.garak.runner import build_garak_config
         hf_cfg = build_garak_config("huggingface/org/model", ["dan"], "/tmp/out")
         or_cfg = build_garak_config("openrouter/org/model", ["dan"], "/tmp/out")
         hf_name = hf_cfg["plugins"]["generators"]["rest"]["RestGenerator"]["name"]
@@ -55,21 +55,21 @@ class TestBuildGarakConfigOpenRouter:
 
     def test_openrouter_uri_unchanged(self):
         """OpenRouter config still points to openrouter.ai endpoint."""
-        from glokta.worker.garak_runner import build_garak_config
+        from glokta.infrastructure.garak.runner import build_garak_config
         cfg = build_garak_config("openrouter/meta-llama/llama-3-8b-instruct:free", ["dan"], "/tmp/out")
         uri = cfg["plugins"]["generators"]["rest"]["RestGenerator"]["uri"]
         assert "openrouter.ai" in uri
 
     def test_openrouter_key_env_var_unchanged(self):
         """OpenRouter config still uses OPENROUTER_API_KEY."""
-        from glokta.worker.garak_runner import build_garak_config
+        from glokta.infrastructure.garak.runner import build_garak_config
         cfg = build_garak_config("openrouter/org/model", ["dan"], "/tmp/out")
         key_var = cfg["plugins"]["generators"]["rest"]["RestGenerator"]["key_env_var"]
         assert key_var == "OPENROUTER_API_KEY"
 
     def test_openrouter_request_body_has_model_field(self):
         """OpenRouter request body still includes the model field."""
-        from glokta.worker.garak_runner import build_garak_config
+        from glokta.infrastructure.garak.runner import build_garak_config
         cfg = build_garak_config("openrouter/org/model", ["dan"], "/tmp/out")
         body = cfg["plugins"]["generators"]["rest"]["RestGenerator"]["req_template_json_object"]
         assert "model" in body
@@ -92,12 +92,12 @@ class TestDefaultProbeCategories:
 
     def test_contains_exactly_security_risk_probes(self):
         """DEFAULT_PROBE_CATEGORIES matches the security risk probe set exactly."""
-        from glokta.worker.garak_runner import DEFAULT_PROBE_CATEGORIES
+        from glokta.infrastructure.garak.runner import DEFAULT_PROBE_CATEGORIES
         assert set(DEFAULT_PROBE_CATEGORIES) == self._EXPECTED
 
     def test_training_probe_categories_removed(self):
         """TRAINING_PROBE_CATEGORIES is retired — it must not exist on the module."""
-        import glokta.worker.garak_runner as runner
+        import glokta.infrastructure.garak.runner as runner
         assert not hasattr(runner, "TRAINING_PROBE_CATEGORIES")
 
 
@@ -109,7 +109,7 @@ class TestRunGarakEnvOverrides:
         import subprocess
         from unittest.mock import patch, MagicMock
 
-        from glokta.worker.garak_runner import run_garak
+        from glokta.infrastructure.garak.runner import run_garak
 
         fake_jsonl = tmp_path / "scan.report.jsonl"
         fake_jsonl.write_text('{"key": "value"}\n')
@@ -131,7 +131,7 @@ class TestRunGarakEnvOverrides:
         import subprocess
         from unittest.mock import patch, MagicMock, call
 
-        from glokta.worker.garak_runner import run_garak
+        from glokta.infrastructure.garak.runner import run_garak
 
         fake_jsonl = tmp_path / "scan.report.jsonl"
         fake_jsonl.write_text('{"key": "value"}\n')

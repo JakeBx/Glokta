@@ -18,7 +18,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from glokta.config import settings
-from glokta.risks import ACTIVE_RISKS, RISK_DEFINITIONS
+from glokta.domain.risks import ACTIVE_RISKS, RISK_DEFINITIONS
 
 API_BASE = settings.api_base_url
 

@@ -12,7 +12,7 @@ import pytest
 
 os.environ["TESTING"] = "1"
 
-from glokta.models import Model, Run
+from glokta.infrastructure.db.orm import Model, Run
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ class TestDiscoverAndQueue:
     def _call(self, db_session, top_models, top_n=10, max_cost=100.0, ttl_days=7):
         from glokta.pipeline.flows import _discover_and_queue
 
-        with patch("glokta.pipeline.flows.fetch_top_models", return_value=top_models):
+        with patch("glokta.application.scan_service.fetch_top_models", return_value=top_models):
             return _discover_and_queue(
                 db_session,
                 api_key="test-key",
@@ -192,7 +192,7 @@ class TestDiscoverAndQueue:
         """_discover_and_queue passes api_key, top_n, max_scan_cost_usd to fetch_top_models."""
         from glokta.pipeline.flows import _discover_and_queue
 
-        with patch("glokta.pipeline.flows.fetch_top_models", return_value=[]) as mock_fetch:
+        with patch("glokta.application.scan_service.fetch_top_models", return_value=[]) as mock_fetch:
             _discover_and_queue(
                 db_session,
                 api_key="my-key",
@@ -240,8 +240,8 @@ class TestDiscoverAndQueueHf:
     ):
         from glokta.pipeline.flows import _discover_and_queue
 
-        with patch("glokta.pipeline.flows.fetch_top_models", return_value=or_models or []):
-            with patch("glokta.pipeline.flows.fetch_top_hf_models", return_value=hf_models or []):
+        with patch("glokta.application.scan_service.fetch_top_models", return_value=or_models or []):
+            with patch("glokta.application.scan_service.fetch_top_hf_models", return_value=hf_models or []):
                 return _discover_and_queue(
                     db_session,
                     api_key="or-key",
@@ -280,8 +280,8 @@ class TestDiscoverAndQueueHf:
         """When hf_token is empty string, fetch_top_hf_models is never called."""
         from glokta.pipeline.flows import _discover_and_queue
 
-        with patch("glokta.pipeline.flows.fetch_top_models", return_value=[]):
-            with patch("glokta.pipeline.flows.fetch_top_hf_models") as mock_hf:
+        with patch("glokta.application.scan_service.fetch_top_models", return_value=[]):
+            with patch("glokta.application.scan_service.fetch_top_hf_models") as mock_hf:
                 _discover_and_queue(
                     db_session,
                     api_key="key",
@@ -298,8 +298,8 @@ class TestDiscoverAndQueueHf:
         """When hf_top_n=0, HF discovery is also skipped."""
         from glokta.pipeline.flows import _discover_and_queue
 
-        with patch("glokta.pipeline.flows.fetch_top_models", return_value=[]):
-            with patch("glokta.pipeline.flows.fetch_top_hf_models") as mock_hf:
+        with patch("glokta.application.scan_service.fetch_top_models", return_value=[]):
+            with patch("glokta.application.scan_service.fetch_top_hf_models") as mock_hf:
                 _discover_and_queue(
                     db_session,
                     api_key="key",

@@ -4,7 +4,7 @@ from collections.abc import Generator
 
 from sqlalchemy.orm import Session
 
-from glokta.database import SessionLocal
+from glokta.infrastructure.db.session import SessionLocal
 
 
 def get_db() -> Generator[Session, None, None]:

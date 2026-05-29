@@ -6,7 +6,7 @@ from datetime import date, datetime
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from glokta.models import (
+from glokta.infrastructure.db.orm import (
     Model,
     Run,
     ProbeResult,

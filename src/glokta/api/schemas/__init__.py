@@ -1,9 +1,9 @@
 """Pydantic schemas for Glokta API."""
 
-from glokta.schemas.model import ModelBase, ModelCreate, ModelResponse
-from glokta.schemas.run import RunCreate, RunResponse, RunStatus, RunSummaryRow
-from glokta.schemas.probe_result import AttemptResponse, ProbeResultResponse
-from glokta.schemas.leaderboard import (
+from glokta.api.schemas.model import ModelBase, ModelCreate, ModelResponse
+from glokta.api.schemas.run import RunCreate, RunResponse, RunStatus, RunSummaryRow
+from glokta.api.schemas.probe_result import AttemptResponse, ProbeResultResponse
+from glokta.api.schemas.leaderboard import (
     LeaderboardRow,
     LeaderboardResponse,
     ProbeResultDetail,

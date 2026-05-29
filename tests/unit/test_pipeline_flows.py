@@ -16,8 +16,8 @@ import pytest
 
 os.environ["TESTING"] = "1"
 
-from glokta.ingest.jsonl_parser import IngestResult
-from glokta.models import Model, Run
+from glokta.application.ingest import IngestResult
+from glokta.infrastructure.db.orm import Model, Run
 
 
 # ---------------------------------------------------------------------------
@@ -286,10 +286,10 @@ class TestExecuteScan:
 
         ingest_result = IngestResult(probe_results_count=5, attempts_count=25, skipped_count=0)
 
-        with patch("glokta.pipeline.flows.build_garak_config", return_value={}) as mock_cfg:
-            with patch("glokta.pipeline.flows.run_garak", return_value="/tmp/out.jsonl") as mock_garak:
-                with patch("glokta.pipeline.flows.ingest_jsonl_file", return_value=ingest_result) as mock_ingest:
-                    with patch("glokta.pipeline.flows.compute_remaining_probes", return_value=["encoding.InjectBase64"]):
+        with patch("glokta.application.scan_service.build_garak_config", return_value={}) as mock_cfg:
+            with patch("glokta.application.scan_service.run_garak", return_value="/tmp/out.jsonl") as mock_garak:
+                with patch("glokta.application.scan_service.ingest_jsonl_file", return_value=ingest_result) as mock_ingest:
+                    with patch("glokta.application.scan_service.compute_remaining_probes", return_value=["encoding.InjectBase64"]):
                         result = _execute_scan(str(run.id), model.name, [], db_session)
 
         mock_cfg.assert_called_once()
@@ -306,10 +306,10 @@ class TestExecuteScan:
 
         empty = IngestResult(probe_results_count=0, attempts_count=0, skipped_count=0)
 
-        with patch("glokta.pipeline.flows.build_garak_config", return_value={}):
-            with patch("glokta.pipeline.flows.run_garak", return_value="/tmp/out.jsonl"):
-                with patch("glokta.pipeline.flows.ingest_jsonl_file", return_value=empty):
-                    with patch("glokta.pipeline.flows.compute_remaining_probes", return_value=["encoding.InjectBase64"]):
+        with patch("glokta.application.scan_service.build_garak_config", return_value={}):
+            with patch("glokta.application.scan_service.run_garak", return_value="/tmp/out.jsonl"):
+                with patch("glokta.application.scan_service.ingest_jsonl_file", return_value=empty):
+                    with patch("glokta.application.scan_service.compute_remaining_probes", return_value=["encoding.InjectBase64"]):
                         with pytest.raises(EmptyIngestError):
                             _execute_scan(str(run.id), model.name, [], db_session)
 
@@ -320,8 +320,8 @@ class TestExecuteScan:
         model = _seed_model(db_session, "test/model-scan-3")
         run = _seed_run(db_session, model, "running")
 
-        with patch("glokta.pipeline.flows.compute_remaining_probes", return_value=[]):
-            with patch("glokta.pipeline.flows.run_garak") as mock_garak:
+        with patch("glokta.application.scan_service.compute_remaining_probes", return_value=[]):
+            with patch("glokta.application.scan_service.run_garak") as mock_garak:
                 result = _execute_scan(str(run.id), model.name, [], db_session)
 
         mock_garak.assert_not_called()
@@ -336,10 +336,10 @@ class TestExecuteScan:
 
         ingest_result = IngestResult(probe_results_count=12, attempts_count=60, skipped_count=0)
 
-        with patch("glokta.pipeline.flows.build_garak_config", return_value={}):
-            with patch("glokta.pipeline.flows.run_garak", return_value="/tmp/out.jsonl"):
-                with patch("glokta.pipeline.flows.ingest_jsonl_file", return_value=ingest_result):
-                    with patch("glokta.pipeline.flows.compute_remaining_probes", return_value=["encoding.InjectBase64"]):
+        with patch("glokta.application.scan_service.build_garak_config", return_value={}):
+            with patch("glokta.application.scan_service.run_garak", return_value="/tmp/out.jsonl"):
+                with patch("glokta.application.scan_service.ingest_jsonl_file", return_value=ingest_result):
+                    with patch("glokta.application.scan_service.compute_remaining_probes", return_value=["encoding.InjectBase64"]):
                         result = _execute_scan(str(run.id), model.name, [], db_session)
 
         assert result["probe_results_count"] == 12
@@ -353,10 +353,10 @@ class TestExecuteScan:
         run = _seed_run(db_session, model, "running")
         ingest_result = IngestResult(probe_results_count=3, attempts_count=15, skipped_count=0)
 
-        with patch("glokta.pipeline.flows.build_garak_config", return_value={}):
-            with patch("glokta.pipeline.flows.run_garak", return_value="/tmp/out.jsonl") as mock_garak:
-                with patch("glokta.pipeline.flows.ingest_jsonl_file", return_value=ingest_result):
-                    with patch("glokta.pipeline.flows.compute_remaining_probes", return_value=["dan.Dan_11_0"]):
+        with patch("glokta.application.scan_service.build_garak_config", return_value={}):
+            with patch("glokta.application.scan_service.run_garak", return_value="/tmp/out.jsonl") as mock_garak:
+                with patch("glokta.application.scan_service.ingest_jsonl_file", return_value=ingest_result):
+                    with patch("glokta.application.scan_service.compute_remaining_probes", return_value=["dan.Dan_11_0"]):
                         _execute_scan(str(run.id), model.name, [], db_session)
 
         env_overrides = mock_garak.call_args.args[1]
@@ -371,10 +371,10 @@ class TestExecuteScan:
         run = _seed_run(db_session, model, "running")
         ingest_result = IngestResult(probe_results_count=3, attempts_count=15, skipped_count=0)
 
-        with patch("glokta.pipeline.flows.build_garak_config", return_value={}):
-            with patch("glokta.pipeline.flows.run_garak", return_value="/tmp/out.jsonl") as mock_garak:
-                with patch("glokta.pipeline.flows.ingest_jsonl_file", return_value=ingest_result):
-                    with patch("glokta.pipeline.flows.compute_remaining_probes", return_value=["dan.Dan_11_0"]):
+        with patch("glokta.application.scan_service.build_garak_config", return_value={}):
+            with patch("glokta.application.scan_service.run_garak", return_value="/tmp/out.jsonl") as mock_garak:
+                with patch("glokta.application.scan_service.ingest_jsonl_file", return_value=ingest_result):
+                    with patch("glokta.application.scan_service.compute_remaining_probes", return_value=["dan.Dan_11_0"]):
                         _execute_scan(str(run.id), model.name, [], db_session)
 
         env_overrides = mock_garak.call_args.args[1]

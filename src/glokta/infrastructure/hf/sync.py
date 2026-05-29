@@ -41,7 +41,7 @@ def dataset_split_to_rows(split) -> list[dict]:
 
 
 def import_models(session, rows: list[dict], dry_run: bool) -> tuple[int, int]:
-    from glokta.models import Model
+    from glokta.infrastructure.db.orm import Model
     inserted = 0
     skipped = 0
     existing_ids = {str(m.id) for m in session.query(Model.id).all()}
@@ -66,7 +66,7 @@ def import_models(session, rows: list[dict], dry_run: bool) -> tuple[int, int]:
 
 
 def import_runs(session, rows: list[dict], dry_run: bool) -> tuple[int, int]:
-    from glokta.models import Run
+    from glokta.infrastructure.db.orm import Run
     inserted = 0
     skipped = 0
     existing_ids = {str(r.id) for r in session.query(Run.id).all()}
@@ -99,7 +99,7 @@ def import_runs(session, rows: list[dict], dry_run: bool) -> tuple[int, int]:
 
 
 def import_probe_results(session, rows: list[dict], dry_run: bool) -> tuple[int, int]:
-    from glokta.models import ProbeResult
+    from glokta.infrastructure.db.orm import ProbeResult
     inserted = 0
     skipped = 0
     existing_keys = {
@@ -129,7 +129,7 @@ def import_probe_results(session, rows: list[dict], dry_run: bool) -> tuple[int,
 
 
 def import_attempts(session, rows: list[dict], dry_run: bool) -> tuple[int, int]:
-    from glokta.models import Attempt
+    from glokta.infrastructure.db.orm import Attempt
     inserted = 0
     skipped = 0
     existing_ids = {a.id for a in session.query(Attempt.id).all()}
@@ -163,7 +163,7 @@ def import_all(dry_run: bool = False) -> None:
     are skipped. Raises RuntimeError if HF_DATASET_REPO is not set or download fails.
     """
     from glokta.config import settings
-    from glokta.database import SessionLocal, init_db, migrate_db
+    from glokta.infrastructure.db.session import SessionLocal, init_db, migrate_db
 
     hf_repo = settings.hf_dataset_repo
     hf_token = settings.hf_token or None
