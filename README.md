@@ -21,7 +21,6 @@ Once running: Gradio UI at `http://localhost:7860`, API docs at `http://localhos
 - **Leaderboard UI** — filterable table with per-model drill-down showing probe-level breakdowns (Gradio, `localhost:7860` after `docker compose up`)
 - **Manual run triggering** — `POST /api/runs` with a model UUID; the Prefect pipeline picks it up on the next 2-minute poll
 - **Prefect orchestration** — automatic retries, Prefect Server UI at `localhost:4200` after `docker compose up`, SKIP LOCKED for safe concurrent workers
-- **Zero direct cost** — targets OpenRouter free-tier models exclusively; no spend required to run the full probe suite
 - **Docker Compose full-stack deployment** — one command starts API, Prefect Server, Prefect worker, Gradio frontend, and PostgreSQL
 - **10 probe categories** — `encoding`, `dan`, `goodside`, `promptinject`, `malwaregen`, `continuation`, `lmrc`, `leakreplay`, `snowball`, `badchars`
 
