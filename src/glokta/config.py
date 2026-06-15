@@ -51,6 +51,20 @@ class Settings(BaseSettings):
     scheduler_hf_top_n_models: int = 20
     hf_rpm_limit: int = 600     # HF serverless inference has stricter rate limits than OpenRouter
 
+    # CTI living benchmark
+    cti_enabled: bool = False          # gate CTI ingest/eval flows
+    nvd_api_key: str = ""              # NVD API 2.0 key (50 req/30s); empty falls back to 5/30s
+    cti_data_dir: str = "/tmp/glokta-cti"  # git clone path for cvelistV5/galaxy/attack
+    cti_rpm_limit: int = 600           # rate limit for CTI inference calls
+    cti_prequential_fading_factor: float = 0.99  # Gama et al. recency-weighting factor
+    cti_withhold_window_days: int = 14  # newest-slice raw-text holdout window
+    cti_judge_model: str = "claude-opus-4-8"  # LLM judge for the SYN task residue
+    # Recent-slice bounding + eval safety rails
+    cti_ingest_lookback_days: int = 3   # only ingest items changed within this window
+    cti_max_items_per_run: int = 100    # hard cap on inference calls per CTI run
+    cti_eval_commit_every: int = 20     # commit results every N items (enables resume)
+    cti_run_timeout_seconds: int = 3600  # wall-clock budget for one CTI run
+
     @field_validator("database_url")
     @classmethod
     def database_url_must_be_set(cls, v: str) -> str:

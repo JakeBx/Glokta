@@ -27,6 +27,8 @@ pipeline = [
     "prefect==3.7.0",
     "garak>=0.9",
     "huggingface_hub>=0.23",
+    "cvss>=3.0",        # CVSS v3.1/v4 vector parsing for the CTI VSP task
+    "feedparser>=6.0",  # RSS polling for CTI advisory connectors
 ]
 dev = [
     "pytest>=8.2",

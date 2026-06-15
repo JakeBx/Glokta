@@ -10,6 +10,8 @@ from pathlib import Path
 
 import yaml
 
+from glokta.infrastructure.llm.routing import build_request_body, resolve_route
+
 logger = logging.getLogger(__name__)
 
 # Default timeout — overridden by settings.garak_timeout_seconds at call sites.
@@ -25,6 +27,25 @@ DEFAULT_PROBE_CATEGORIES = [
     "promptinject",         # Prompt Injection / String Hijacking
     "sysprompt_extraction", # Information Disclosure / Reconnaissance
     "web_injection",        # XSS, CSRF, and Data Exfiltration
+    "dan.AntiDAN",          # DAN: Jailbreak robustness, down sampled to manage runtime
+    "dan.AutoDANCached",
+    "dan.ChatGPT_Developer_Mode_RANTI",
+    "dan.ChatGPT_Developer_Mode_v2",
+    "dan.ChatGPT_Image_Markdown",
+    "dan.DAN_Jailbreak",
+    "dan.DUDE",
+    "dan.DanInTheWild",
+    "dan.Dan_10_0",
+    "dan.Dan_11_0",
+    "dan.Dan_6_0",
+    "dan.Dan_6_2",
+    "dan.Dan_7_0",
+    "dan.Dan_8_0",
+    "dan.Dan_9_0",
+    "dan.STAN",
+    "goodside",
+    "encoding.InjectBase64",
+    "encoding.InjectROT13",
 ]
 
 
@@ -46,47 +67,26 @@ def compute_remaining_probes(done: set[str], probe_categories: list[str]) -> lis
     prompts without respecting soft_probe_prompt_cap and make scans prohibitively
     long at API rate limits.
     """
-    category_set = set(probe_categories)
+    # Split categories into bare prefixes ("dan") and fully-qualified names ("dan.AntiDAN").
+    # DEFAULT_PROBE_CATEGORIES mixes both forms.
+    category_prefixes: set[str] = set()
+    fully_qualified: set[str] = set()
+    for entry in probe_categories:
+        if "." in entry:
+            fully_qualified.add(entry)
+        else:
+            category_prefixes.add(entry)
+
     result = []
     for full_name in _all_garak_probe_names():
         db_name = full_name.removeprefix("probes.")
         probe_class = db_name.split(".")[-1] if "." in db_name else db_name
         category = db_name.split(".")[0]
-        if category in category_set and db_name not in done and not probe_class.endswith("Full"):
+        if probe_class.endswith("Full") or db_name in done:
+            continue
+        if category in category_prefixes or db_name in fully_qualified:
             result.append(db_name)
     return result
-
-
-_OPENROUTER_GENERATOR_NAME = "openrouter-direct"
-_HF_GENERATOR_NAME = "hf-inference-direct"
-_OPENROUTER_URI = "https://openrouter.ai/api/v1/chat/completions"
-# HF Inference Providers router — model identified via the "model" field in the request body
-_HF_URI = "https://router.huggingface.co/v1/chat/completions"
-
-# Per-provider request timeouts.
-# HF serverless inference is slower, especially for large models — 180s gives breathing
-# room for thinking-mode models that stream a long reasoning preamble before the answer.
-_HF_REQUEST_TIMEOUT = 180
-_OPENROUTER_REQUEST_TIMEOUT = 90
-
-# Model name substrings that indicate thinking/reasoning mode is on by default.
-# For these models we inject the provider-specific flag to disable thinking so that:
-#   1. Responses fit within garak's response buffer
-#   2. Round-trip latency stays under _HF_REQUEST_TIMEOUT
-#   3. Response content is in $.choices[0].message.content (not reasoning_content)
-_THINKING_MODEL_SUBSTRINGS = (
-    "qwen3",          # Qwen3-* default to thinking mode on HF serverless
-    "deepseek-r",     # DeepSeek-R series
-    "deepseek-v4",    # DeepSeek-V4-Pro uses extended reasoning
-    "kimi-k2",        # Moonshot Kimi K2
-    "kimi_k2",
-)
-
-
-def _is_thinking_model(raw_model: str) -> bool:
-    """Return True if the model name suggests it defaults to thinking/reasoning mode."""
-    lower = raw_model.lower()
-    return any(sub in lower for sub in _THINKING_MODEL_SUBSTRINGS)
 
 
 def build_garak_config(
@@ -102,33 +102,14 @@ def build_garak_config(
     probes = probe_categories if probe_categories else DEFAULT_PROBE_CATEGORIES
     spec = probe_spec_override if probe_spec_override is not None else ",".join(probes)
 
-    if model_name.startswith("huggingface/"):
-        raw_model = model_name.removeprefix("huggingface/")
-        generator_name = _HF_GENERATOR_NAME
-        uri = _HF_URI
-        key_env_var = "HF_TOKEN"
-        request_timeout = _HF_REQUEST_TIMEOUT
-        req_body: dict = {
-            "model": raw_model,
-            "messages": [{"role": "user", "content": "$INPUT"}],
-            "stream": False,
-        }
-        if _is_thinking_model(raw_model):
-            req_body["thinking"] = {"type": "disabled"}
-            logger.info(
-                "build_garak_config: thinking suppression enabled for %s", raw_model
-            )
-    else:
-        raw_model = model_name.removeprefix("openrouter/")
-        generator_name = _OPENROUTER_GENERATOR_NAME
-        uri = _OPENROUTER_URI
-        key_env_var = "OPENROUTER_API_KEY"
-        request_timeout = _OPENROUTER_REQUEST_TIMEOUT
-        req_body = {
-            "model": raw_model,
-            "messages": [{"role": "user", "content": "$INPUT"}],
-            "stream": False,
-        }
+    route = resolve_route(model_name)
+    req_body = build_request_body(
+        route, [{"role": "user", "content": "$INPUT"}], stream=False
+    )
+    if route.suppress_thinking:
+        logger.info(
+            "build_garak_config: thinking suppression enabled for %s", route.raw_model
+        )
 
     config: dict = {
         "system": {
@@ -136,23 +117,23 @@ def build_garak_config(
         },
         "plugins": {
             "target_type": "rest",
-            "target_name": generator_name,
+            "target_name": route.generator_name,
             "probe_spec": spec,
             "generators": {
                 "rest": {
                     "RestGenerator": {
-                        "name": generator_name,
-                        "uri": uri,
+                        "name": route.generator_name,
+                        "uri": route.uri,
                         "method": "post",
                         "headers": {
                             "Content-Type": "application/json",
                             "Authorization": "Bearer $KEY",
                         },
-                        "key_env_var": key_env_var,
+                        "key_env_var": route.key_env_var,
                         "req_template_json_object": req_body,
                         "response_json": True,
                         "response_json_field": "$.choices[0].message.content",
-                        "request_timeout": request_timeout,
+                        "request_timeout": route.request_timeout,
                     }
                 }
             },

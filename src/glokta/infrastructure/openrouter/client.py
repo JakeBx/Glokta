@@ -58,6 +58,8 @@ def fetch_top_models(
     for model in catalog:
         if not model.get("id"):
             continue
+        elif model.get("id").endswith(":free"):
+            continue
         if max_scan_cost_usd is not None:
             cost = estimate_scan_cost_usd(model.get("pricing", {}))
             if cost > max_scan_cost_usd:

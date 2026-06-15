@@ -6,6 +6,7 @@ Thin Prefect adapter — all business logic lives in application/scan_service.py
 import logging
 
 from prefect import flow, task
+from prefect.logging import get_run_logger
 from sqlalchemy.orm import Session
 
 from glokta.config import settings
@@ -73,6 +74,7 @@ def execute_garak_scan_task(
             probe_prompt_cap=probe_prompt_cap,
             parallel_attempts_override=parallel_attempts_override,
             scan_timeout_seconds=scan_timeout_seconds,
+            pf_logger=get_run_logger(),
         )
 
         if not result.get("skipped"):

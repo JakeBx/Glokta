@@ -36,3 +36,76 @@ deployments:
     work_pool:
       name: glokta-process-pool
       job_variables: {}
+
+  - name: cti-ingest-cve
+    entrypoint: src/glokta/pipeline/cti_flows.py:cti_ingest_cve
+    schedules:
+      - cron: "0 * * * *"
+        timezone: UTC
+    work_pool:
+      name: glokta-process-pool
+      job_variables: {}
+
+  - name: cti-ingest-kev
+    entrypoint: src/glokta/pipeline/cti_flows.py:cti_ingest_kev
+    schedules:
+      - cron: "30 0 * * *"
+        timezone: UTC
+    work_pool:
+      name: glokta-process-pool
+      job_variables: {}
+
+  - name: cti-ingest-attack
+    entrypoint: src/glokta/pipeline/cti_flows.py:cti_ingest_attack
+    schedules:
+      - cron: "0 4 * * 1"
+        timezone: UTC
+    work_pool:
+      name: glokta-process-pool
+      job_variables: {}
+
+  - name: cti-ingest-galaxy
+    entrypoint: src/glokta/pipeline/cti_flows.py:cti_ingest_galaxy
+    schedules:
+      - cron: "30 4 * * 1"
+        timezone: UTC
+    work_pool:
+      name: glokta-process-pool
+      job_variables: {}
+
+  - name: cti-ingest-report
+    entrypoint: src/glokta/pipeline/cti_flows.py:cti_ingest_report
+    schedules:
+      - cron: "0 5 * * *"
+        timezone: UTC
+    work_pool:
+      name: glokta-process-pool
+      job_variables: {}
+
+  - name: cti-ingest-syn
+    entrypoint: src/glokta/pipeline/cti_flows.py:cti_ingest_syn
+    schedules:
+      - cron: "30 5 * * *"
+        timezone: UTC
+    work_pool:
+      name: glokta-process-pool
+      job_variables: {}
+
+  - name: cti-scan-pending
+    entrypoint: src/glokta/pipeline/cti_flows.py:cti_scan_pending
+    concurrency_limit: 4
+    schedules:
+      - interval: 900
+        timezone: UTC
+    work_pool:
+      name: glokta-process-pool
+      job_variables: {}
+
+  - name: cti-trigger
+    entrypoint: src/glokta/pipeline/cti_flows.py:cti_trigger
+    schedules:
+      - cron: "0 3 * * 1"
+        timezone: UTC
+    work_pool:
+      name: glokta-process-pool
+      job_variables: {}
