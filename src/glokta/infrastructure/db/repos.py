@@ -181,11 +181,14 @@ class CtiItemRepository:
         before: date | None = None,
         after: date | None = None,
         limit: int | None = None,
+        exclude_ids: set[uuid.UUID] | None = None,
     ) -> list[CtiItem]:
         """Active items for a task, ordered by first_available_date.
 
         ``before``/``after`` bound first_available_date (inclusive); ``exclude_withheld``
-        drops the rolling private holdout slice; ``limit`` caps the pool size.
+        drops the rolling private holdout slice; ``exclude_ids`` drops already-scored items
+        BEFORE ``limit`` is applied, so a capped run resumes onto the next page rather than
+        re-seeing an already-scored first page.
         """
         query = self._db.query(CtiItem).filter(
             CtiItem.task == task,
@@ -193,6 +196,8 @@ class CtiItemRepository:
         )
         if exclude_withheld:
             query = query.filter(CtiItem.withhold.is_(False))
+        if exclude_ids:
+            query = query.filter(CtiItem.id.notin_(exclude_ids))
         if before is not None:
             query = query.filter(CtiItem.first_available_date <= before)
         if after is not None:

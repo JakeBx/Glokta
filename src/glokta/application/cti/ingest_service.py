@@ -57,6 +57,11 @@ def upsert_item(
     existing = repo.active_for(item.task, item.external_id)
     if existing is not None:
         if existing.label == item.label:
+            # Refresh the holdout flag so an item graduates out of the rolling window once
+            # it elapses (otherwise a once-withheld item stays withheld until its label changes).
+            if existing.withhold != withhold:
+                existing.withhold = withhold
+                db.flush()
             return UpsertOutcome(existing, "unchanged")
         # Mutable label changed — snapshot: supersede the old, insert the new.
         existing.status = "superseded"

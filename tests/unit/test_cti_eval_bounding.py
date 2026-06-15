@@ -62,6 +62,37 @@ class TestPerRunCap:
         assert db_session.query(CtiResult).filter(CtiResult.run_id == run.id).count() == 4
 
 
+class TestResumePastCap:
+    def test_resume_scores_next_slice_when_first_page_already_scored(self, db_session):
+        m = _model(db_session)
+        _items(db_session, 6)
+        run = CtiRun(model_id=m.id, task="rcm", status="running")
+        db_session.add(run)
+        db_session.flush()
+
+        # Pre-score the first capped page (the 3 oldest items) for THIS run.
+        first_page = (
+            CtiItemRepository(db_session)
+            .slice_for_task("rcm", limit=3)
+        )
+        for item in first_page:
+            db_session.add(
+                CtiResult(run_id=run.id, item_id=item.id, model_id=m.id, score=1.0)
+            )
+        db_session.flush()
+
+        calls = []
+
+        def spy(model_name, prompt, **kw):
+            calls.append(prompt)
+            return "Answer: CWE-89"
+
+        execute_cti_run(str(run.id), m.name, "rcm", db_session, infer=spy, max_items=3)
+        # Must advance to the next 3 unscored items, not re-see the scored first page.
+        assert len(calls) == 3
+        assert db_session.query(CtiResult).filter(CtiResult.run_id == run.id).count() == 6
+
+
 class TestIncrementalCommit:
     def test_results_committed_in_batches(self, db_session):
         m = _model(db_session)

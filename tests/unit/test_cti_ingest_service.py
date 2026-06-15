@@ -68,6 +68,29 @@ class TestUpsertItem:
         assert active.label == {"cwe": ["CWE-89"]}
         assert db_session.query(CtiItem).count() == 2
 
+    def test_unchanged_reingest_releases_item_from_holdout_window(self, db_session):
+        # Ingested as withheld (recent label, inside the window)...
+        first = upsert_item(
+            db_session,
+            _item({"cwe": ["CWE-79"]}, label_date=date(2024, 6, 10)),
+            now=date(2024, 6, 14),
+            withhold_window_days=14,
+        )
+        assert first.item.withhold is True
+
+        # ...re-ingested unchanged after the window has elapsed -> must be released.
+        second = upsert_item(
+            db_session,
+            _item({"cwe": ["CWE-79"]}, label_date=date(2024, 6, 10)),
+            now=date(2024, 8, 1),
+            withhold_window_days=14,
+        )
+        assert second.action == "unchanged"
+        assert second.item.withhold is False
+        # and it now appears in the public slice
+        sliced = CtiItemRepository(db_session).slice_for_task("rcm")
+        assert any(i.external_id == "CVE-2024-1" for i in sliced)
+
     def test_authority_disagreement_preserved(self, db_session):
         outcome = upsert_item(
             db_session, _item({"cwe": ["CWE-79"]}, authority="disagree")

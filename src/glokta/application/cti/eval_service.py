@@ -20,7 +20,7 @@ from glokta.infrastructure.cti.evaluator import evaluate_item
 from glokta.infrastructure.cti.inference import complete
 from glokta.infrastructure.cti.prompts import build_prompt, prompt_hash
 from glokta.infrastructure.llm.throttle import RateLimiter
-from glokta.infrastructure.db.orm import CtiResult, CtiRun
+from glokta.infrastructure.db.orm import CtiItem, CtiResult, CtiRun
 from glokta.infrastructure.db.repos import (
     CtiItemRepository,
     CtiResultRepository,
@@ -91,16 +91,18 @@ def execute_cti_run(
     run.model_cutoff_end = model.cutoff_end
     cutoff_end = model.cutoff_end
 
-    items = CtiItemRepository(db).slice_for_task(task, exclude_withheld=True, limit=max_items)
+    # Exclude already-scored items BEFORE the cap so a resumed/capped run advances onto the
+    # next page instead of re-seeing an already-scored first page.
     already_scored = CtiResultRepository(db).scored_item_ids_for(run.id)
+    items = CtiItemRepository(db).slice_for_task(
+        task, exclude_withheld=True, limit=max_items, exclude_ids=already_scored
+    )
     context = _build_context(db, task)
     if task == "syn" and judge is not None:
         context["judge"] = judge
 
     new_count = 0
     for item in items:
-        if item.id in already_scored:
-            continue
         if new_count >= max_items:
             break
         limiter.wait()
@@ -136,9 +138,21 @@ def execute_cti_run(
     db.flush()
 
     ff = fading_factor if fading_factor is not None else settings.cti_prequential_fading_factor
-    fad_by_item: dict[uuid.UUID, date | None] = {i.id: i.first_available_date for i in items}
     all_results = CtiResultRepository(db).for_run(run.id)
-    run.item_count = len(items)
+    # Anchor dates for ALL scored items (including ones scored on earlier attempts), so
+    # prequential weighting is correct across resumes — not just for the current page.
+    result_item_ids = {r.item_id for r in all_results}
+    fad_by_item: dict[uuid.UUID, date | None] = (
+        {
+            iid: fad
+            for iid, fad in db.query(
+                CtiItem.id, CtiItem.first_available_date
+            ).filter(CtiItem.id.in_(result_item_ids))
+        }
+        if result_item_ids
+        else {}
+    )
+    run.item_count = len(all_results)
     run.scored_count = len(all_results)
     run.prequential_score = prequential_for_run(all_results, fad_by_item, ff)
     if task == "forecast":

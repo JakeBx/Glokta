@@ -112,6 +112,14 @@ def resolve_forecast_labels(db: Session, entries: list[KevEntry]) -> int:
             continue
         item.label = {"exploited": True}
         item.label_date = entry.date_added
+        # Advance the temporal anchor: the exploited label did not exist until KEV listed it,
+        # so availability = max(input_date, kev_date). Otherwise a CVE published pre-cutoff but
+        # KEV-added post-cutoff would be (wrongly) tagged pre-cutoff.
+        if entry.date_added is not None:
+            anchor = entry.date_added
+            if item.input_date is not None and item.input_date > anchor:
+                anchor = item.input_date
+            item.first_available_date = anchor
         resolved += 1
     db.commit()
     logger.info("resolve_forecast_labels: resolved=%d", resolved)

@@ -77,6 +77,17 @@ class TestResolveForecastLabels:
         assert item.label == {"exploited": True}
         assert item.label_date == date(2024, 6, 1)
 
+    def test_resolution_advances_temporal_anchor_to_kev_date(self, db_session):
+        # CVE published 2024-05-01, KEV-added 2024-06-01 -> anchor must move to the later date,
+        # so the exploited label is not treated as available at publication (pre/post-cutoff).
+        seed_forecast_items(db_session, [_cve_record("CVE-2024-1")], "rev")
+        item = db_session.query(CtiItem).filter(CtiItem.task == "forecast").one()
+        assert item.first_available_date == date(2024, 5, 1)  # publication, pre-resolution
+
+        resolve_forecast_labels(db_session, normalise_kev_feed(KEV_FEED))
+        db_session.refresh(item)
+        assert item.first_available_date == date(2024, 6, 1)  # max(pub, kev_date)
+
 
 class TestForecastParsing:
     def test_extracts_decimal_probability(self):
