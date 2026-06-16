@@ -67,8 +67,9 @@ CTI_TASKS: dict[str, CtiTask] = {
         "scoring_type": "claim_set",
         "cadence": "daily",
         "leak_resistance": "moderate",
-        # disabled until the input-reconstruction pilot gate passes (plan section 5)
-        "enabled": False,
+        # Enabled: the input-reconstruction gate is enforced at ingest via the hybrid masking
+        # policy (ingest_syn_items mask=True + drop-residue), validated in notebook 07.
+        "enabled": True,
     },
 }
 

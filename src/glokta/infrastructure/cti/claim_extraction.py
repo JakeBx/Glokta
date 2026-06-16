@@ -106,3 +106,38 @@ def reconstruct_inputs(advisory: dict) -> str:
     sections = advisory.get("sections") or {}
     parts = [sections[name] for name in _INPUT_SECTIONS if sections.get(name)]
     return "\n\n".join(parts).strip()
+
+
+# Word-bounded ATT&CK technique id (incl. sub-technique), e.g. T1059 or T1566.001.
+_TECH_ID_RE = re.compile(r"\bT\d{4}(?:\.\d{3})?\b", re.IGNORECASE)
+
+
+def _actor_terms(actor: str | None, alias_index: dict[str, str] | None) -> set[str]:
+    """The actor's canonical name + all aliases that resolve to it (>= 3 chars)."""
+    if not actor:
+        return set()
+    terms = {actor}
+    if alias_index:
+        canonical = alias_index.get(actor.lower(), actor)
+        terms.add(canonical)
+        terms.update(a for a, c in alias_index.items() if c == canonical)
+    return {t for t in terms if t and len(t) >= 3}
+
+
+def mask_conclusions(
+    text: str,
+    *,
+    actor: str | None = None,
+    alias_index: dict[str, str] | None = None,
+) -> str:
+    """Remove the synthesised *labels* (ATT&CK technique ids; actor name + aliases) from the
+    reconstructed inputs, keeping the surrounding behavioural evidence.
+
+    Masking technique *ids* (not the behavioural prose) is the legitimate transform that makes
+    SYN a synthesis task rather than a copy task. Technique *names* are intentionally left as
+    evidence. Actor names are masked because attribution is a conclusion.
+    """
+    masked = _TECH_ID_RE.sub("[technique]", text)
+    for term in sorted(_actor_terms(actor, alias_index), key=len, reverse=True):
+        masked = re.sub(re.escape(term), "[actor]", masked, flags=re.IGNORECASE)
+    return masked

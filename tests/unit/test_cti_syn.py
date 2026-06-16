@@ -1,7 +1,8 @@
 """Tests for the SYN claim-set scoring and the faithfulness judge (Step 6).
 
-SYN stays gated (disabled) pending the input-reconstruction pilot, but the scoring
-machinery is exercised here: objective recall + calibration, judge-assisted faithfulness.
+SYN is enabled now that the input-reconstruction gate is enforced at ingest (hybrid masking);
+the scoring machinery is exercised here: objective recall + calibration, judge-assisted
+faithfulness.
 """
 
 import pytest
@@ -16,8 +17,13 @@ def _cs(*claims):
 
 
 class TestSynGating:
-    def test_syn_disabled_pending_pilot(self):
-        assert CTI_TASKS["syn"]["enabled"] is False
+    def test_syn_enabled_with_masking_gate(self):
+        # Enabled now that the gate is enforced at ingest via the hybrid masking policy
+        # (ingest_syn_items mask=True). It must be queued like the other enabled tasks.
+        from glokta.domain.cti.tasks import ENABLED_TASKS
+
+        assert CTI_TASKS["syn"]["enabled"] is True
+        assert "syn" in ENABLED_TASKS
 
 
 class TestRecall:

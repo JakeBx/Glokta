@@ -27,11 +27,12 @@ The CTI code lives under a `cti` subpackage in each layer (`domain/cti`, `infras
 | **CTI-ATE** | advisory excerpt → ATT&CK technique ids | set F1 (revoked→current) | daily | moderate | ✅ |
 | **CTI-TAA** | intrusion narrative → threat actor | synonym graph C/P/I (1.0/0.5/0.0) | daily | low | ✅ |
 | **Forecast** | CVE at publication → will-be-exploited? | Brier (+ run-level AUC) | daily | **high (leak-proof)** | ✅ |
-| **CTI-SYN** | reconstructed inputs → threat assessment | claim-set recall / faithfulness / calibration | daily | moderate | ⛔ gated |
+| **CTI-SYN** | reconstructed inputs → threat assessment | claim-set recall / faithfulness / calibration | daily | moderate | ✅ |
 
 The registry that drives this table is [`CTI_TASKS`](../src/glokta/domain/cti/tasks.py).
-`SYN` ships disabled (`enabled=False`) pending its input-reconstruction pilot gate, so the
-trigger never auto-queues it.
+`SYN` is enabled: its input-reconstruction leakage gate is enforced at ingest via the hybrid
+masking policy (`ingest_syn_items(mask=True)` masks conclusion labels + drops unmaskable residue),
+so the trigger queues it like any other task.
 
 ---
 
@@ -167,7 +168,7 @@ active model × enabled task that is stale.
   `correct` = `(p ≥ 0.5) == exploited`. Run-level **ROC AUC** (`auc_for_run`, no sklearn) is stored
   on `cti_run.config`; AUC is `None` when only one outcome class is present.
 
-### CTI-SYN — analysis & synthesis *(gated)*
+### CTI-SYN — analysis & synthesis
 
 The novel contribution — nobody benchmarks CTI *synthesis*. SYN scores a model's free-text threat
 assessment against an analyst product (a CISA advisory) decomposed into a checkable claim set.
@@ -190,9 +191,9 @@ assessment against an analyst product (a CISA advisory) decomposed into a checka
     weighted highest),
   - **calibration** — hedge alignment vs the advisory's hedging (objective over matched claims).
 
-  The primary score is a weighted blend (faithfulness double-weighted). SYN stays gated: run it
-  manually with `run_syn_pilot` and inspect reconstructed inputs vs the claim set for leakage
-  before enabling it.
+  The primary score is a weighted blend (faithfulness double-weighted). The input-reconstruction
+  leakage gate is enforced at ingest (`ingest_syn_items(mask=True)`); `run_syn_pilot` remains a
+  manual spot-check for inspecting reconstructed inputs vs the claim set (e.g. for a new source).
 
 ---
 
@@ -231,8 +232,8 @@ All settings live in [config.py](../src/glokta/config.py) (env-overridable; copy
 | `cti-ingest-kev` | daily | KEV → resolve Forecast labels |
 | `cti-ingest-attack` | weekly | refresh ATT&CK technique reference |
 | `cti-ingest-galaxy` | weekly | refresh threat-actor reference |
-| `cti-ingest-report` | daily | advisories → ATE/TAA items |
-| `cti-ingest-syn` | daily | advisories → SYN items (labels only; gated) |
+| `cti-ingest-report` | daily | CISA+CCCS+NCSC+DFIR advisories → ATE/TAA items (deduped) |
+| `cti-ingest-syn` | daily | same deduped advisories → masked SYN items |
 | `cti-trigger` | weekly | apply cutoffs, queue runs per active model × enabled task |
 | `cti-scan-pending` | 15 min | drain one pending CTI run |
 
@@ -279,8 +280,8 @@ produces a scored row even when live advisory parsing isn't production-ready.
   synthetic advisory for these tasks.
 - **`detect_actor` precision.** Greedy substring matching over 1000+ galaxy aliases can mis-pick the
   TAA label; it needs word-boundary / priority matching.
-- **SYN is gated.** The faithfulness judge needs a reachable `CTI_JUDGE_MODEL` endpoint, and the
-  input-reconstruction leakage gate (`run_syn_pilot`) must pass on real advisories before SYN is
-  enabled.
+- **SYN faithfulness depends on the judge endpoint.** The faithfulness check needs a reachable
+  `CTI_JUDGE_MODEL` (`claude-opus-4-8`); without it, recall + calibration still score but
+  faithfulness is `None`. The leakage gate is enforced at ingest via masking + drop-residue.
 - **Cutoffs are curated estimates.** The map in `cutoffs.py` should be refined as vendors publish
   training-cutoff details.

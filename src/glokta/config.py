@@ -59,11 +59,20 @@ class Settings(BaseSettings):
     cti_prequential_fading_factor: float = 0.99  # Gama et al. recency-weighting factor
     cti_withhold_window_days: int = 14  # newest-slice raw-text holdout window
     cti_judge_model: str = "claude-opus-4-8"  # LLM judge for the SYN task residue
+    # Multi-source advisory collection (ATE/TAA/SYN). Comma-separated source keys from
+    # report.SOURCES, deduped across sources (joint advisories are co-sealed).
+    cti_report_sources: str = "cisa,cccs,ncsc,dfir"
+    cti_report_max_per_source: int = 20  # advisory pages fetched per source per run
     # Recent-slice bounding + eval safety rails
     cti_ingest_lookback_days: int = 3   # only ingest items changed within this window
     cti_max_items_per_run: int = 100    # hard cap on inference calls per CTI run
     cti_eval_commit_every: int = 20     # commit results every N items (enables resume)
     cti_run_timeout_seconds: int = 3600  # wall-clock budget for one CTI run
+
+    @property
+    def cti_report_source_list(self) -> list[str]:
+        """Parsed, whitespace-stripped list of configured report sources."""
+        return [s.strip() for s in self.cti_report_sources.split(",") if s.strip()]
 
     @field_validator("database_url")
     @classmethod

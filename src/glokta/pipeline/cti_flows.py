@@ -20,6 +20,7 @@ from glokta.application.cti.forecast_service import (
     seed_forecast_items,
     upsert_kev_entries,
 )
+from glokta.application.cti.collection_service import collect_advisories
 from glokta.application.cti.ingest_service import ingest_cve_records, ingest_items
 from glokta.application.cti.reference_service import (
     build_taa_indices,
@@ -39,12 +40,7 @@ from glokta.infrastructure.cti.connectors.galaxy import (
     normalise_galaxy,
 )
 from glokta.infrastructure.cti.connectors.kev import fetch_kev
-from glokta.infrastructure.cti.connectors.report import (
-    detect_actor,
-    fetch_advisory_feed,
-    normalise_report,
-    parse_advisory,
-)
+from glokta.infrastructure.cti.connectors.report import normalise_report
 from glokta.infrastructure.cti.cutoffs import apply_cutoffs
 from glokta.infrastructure.db.orm import CtiRun
 from glokta.infrastructure.db.session import SessionLocal
@@ -165,30 +161,36 @@ def cti_ingest_galaxy() -> None:
         db.close()
 
 
+def _collect_recent_advisories(db, client):
+    """Shared: build the alias index and collect the deduped recent advisory pool."""
+    alias_index, _related = build_taa_indices(db)
+    advisories, stats = collect_advisories(
+        client,
+        alias_index,
+        sources=settings.cti_report_source_list,
+        lookback_days=settings.cti_ingest_lookback_days,
+        max_per_source=settings.cti_report_max_per_source,
+        headers=_HTTP_HEADERS,
+    )
+    return advisories, alias_index, stats
+
+
 @flow(name="cti-ingest-report", log_prints=True)
 def cti_ingest_report() -> None:
-    """Ingest recent CISA advisories as ATE/TAA items. Daily."""
+    """Ingest recent advisories (CISA + CCCS + NCSC + DFIR) as ATE/TAA items, deduped. Daily."""
     if not settings.cti_enabled:
         return
     db = SessionLocal()
     try:
-        alias_index, _related = build_taa_indices(db)
-        with httpx.Client(timeout=30.0, headers=_HTTP_HEADERS) as client:
-            entries = fetch_advisory_feed(
-                client, lookback_days=settings.cti_ingest_lookback_days
-            )
-            items = []
-            for entry in entries:
-                if not entry.get("link"):
-                    continue
-                page = client.get(entry["link"])
-                advisory = parse_advisory(entry, getattr(page, "text", "") or "")
-                advisory["actor"] = detect_actor(advisory["text"], alias_index)
-                items.extend(normalise_report(advisory))
+        with httpx.Client(timeout=30.0, headers=_HTTP_HEADERS, follow_redirects=True) as client:
+            advisories, _alias, stats = _collect_recent_advisories(db, client)
+        items = []
+        for advisory in advisories:
+            items.extend(normalise_report(advisory))
         result = ingest_items(
             db, items, withhold_window_days=settings.cti_withhold_window_days
         )
-        logger.info("cti_ingest_report: advisories=%d %s", len(entries), result)
+        logger.info("cti_ingest_report: collected=%s items=%d %s", stats, len(items), result)
     except Exception as exc:
         logger.error("cti_ingest_report failed: %s", exc)
         db.rollback()
@@ -199,30 +201,27 @@ def cti_ingest_report() -> None:
 
 @flow(name="cti-ingest-syn", log_prints=True)
 def cti_ingest_syn() -> None:
-    """Ingest SYN items (claim-set labels + reconstructed inputs) from advisories. Gated; no eval queued."""
+    """Ingest SYN items from recent advisories with the hybrid leakage policy (mask + drop). Daily.
+
+    Masking strips the synthesised conclusion labels (ATT&CK ids, actor name/aliases) from the
+    reconstructed inputs and drops any advisory whose residue can't be cleared — the
+    input-reconstruction gate, enforced at ingest now that SYN is enabled.
+    """
     if not settings.cti_enabled:
         return
     db = SessionLocal()
     try:
-        alias_index, _related = build_taa_indices(db)
-        advisories = []
-        with httpx.Client(timeout=30.0, headers=_HTTP_HEADERS) as client:
-            for entry in fetch_advisory_feed(
-                client, lookback_days=settings.cti_ingest_lookback_days
-            ):
-                if not entry.get("link"):
-                    continue
-                page = client.get(entry["link"])
-                advisory = parse_advisory(entry, getattr(page, "text", "") or "")
-                advisory["actor"] = detect_actor(advisory["text"], alias_index)
-                advisories.append(advisory)
+        with httpx.Client(timeout=30.0, headers=_HTTP_HEADERS, follow_redirects=True) as client:
+            advisories, alias_index, stats = _collect_recent_advisories(db, client)
         result = ingest_syn_items(
             db,
             advisories,
             judge_infer=complete,
+            mask=True,
+            alias_index=alias_index,
             withhold_window_days=settings.cti_withhold_window_days,
         )
-        logger.info("cti_ingest_syn: advisories=%d %s", len(advisories), result)
+        logger.info("cti_ingest_syn: collected=%s %s", stats, result)
     except Exception as exc:
         logger.error("cti_ingest_syn failed: %s", exc)
         db.rollback()
@@ -269,7 +268,7 @@ def cti_bootstrap() -> None:
     try:
         apply_cutoffs(db)
         queued = queue_cti_runs(
-            db, tasks=["rcm", "vsp", "ate", "taa", "forecast"], scan_ttl_days=0
+            db, tasks=["rcm", "vsp", "ate", "taa", "forecast", "syn"], scan_ttl_days=0
         )
         logger.info("cti_bootstrap: queued=%s", queued)
         guard = 0
