@@ -13,6 +13,14 @@ from glokta.api.schemas.leaderboard import (
     TrendPoint,
     TrendResponse,
 )
+from glokta.api.schemas.cti import (
+    CtiTaskScore,
+    CtiLeaderboardRow,
+    CtiLeaderboardResponse,
+    CtiTaskRunRow,
+    CtiModelDetailResponse,
+    CtiResultRow,
+)
 
 __all__ = [
     "ModelBase",
@@ -31,4 +39,10 @@ __all__ = [
     "RiskLeaderboardResponse",
     "TrendPoint",
     "TrendResponse",
+    "CtiTaskScore",
+    "CtiLeaderboardRow",
+    "CtiLeaderboardResponse",
+    "CtiTaskRunRow",
+    "CtiModelDetailResponse",
+    "CtiResultRow",
 ]

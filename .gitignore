@@ -42,3 +42,6 @@ pgdata/
 dist/
 build/
 *.egg-info/
+
+# CTI advisory cache (downloaded HTML, not committed)
+data/cisa_advisories/

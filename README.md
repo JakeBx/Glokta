@@ -1,8 +1,13 @@
 # Glokta — Open LLM Security Leaderboard
 
-Glokta is an automated vulnerability scanning platform that runs [garak](https://github.com/NVIDIA/garak) probes against LLM endpoints and surfaces comparative security results in a leaderboard dashboard. It orchestrates scan jobs via Prefect, persists results in PostgreSQL, and presents everything through a Gradio UI and a REST API.
+Glokta is an automated security and intelligence benchmarking platform for LLMs. It runs two complementary evaluation pipelines:
 
-Built as a project to explore what a reproducible, self-hostable LLM security leaderboard looks like in practice. Scores are raw pass rates from named garak probes — no proprietary weighting, no index. Any result can be reproduced by running the same garak command against the same model.
+1. **Garak probe scanning** — runs [garak](https://github.com/NVIDIA/garak) probes against LLM endpoints and surfaces comparative security results in a leaderboard dashboard.
+2. **CTI living benchmark** — continuously evaluates models against a stream of real-world cyber-threat intelligence tasks (CVE classification, CVSS prediction, threat-actor attribution, ATT&CK technique extraction, exploitation forecasting, and CTI synthesis).
+
+Both pipelines are orchestrated via Prefect, persist results in PostgreSQL, and present everything through a Gradio UI and a REST API.
+
+Built as a project to explore what a reproducible, self-hostable LLM security leaderboard looks like in practice. Garak scores are raw pass rates from named probes — no proprietary weighting, no index. CTI scores are computed against dated, provenance-pinned ground truth from public sources (NVD, CISA KEV, MITRE ATT&CK, Galaxy) and designed to be resistant to training-data leakage.
 
 ## Quickstart
 
@@ -14,16 +19,55 @@ docker compose -f docker/docker-compose.yml up
 
 Once running: Gradio UI at `http://localhost:7860`, API docs at `http://localhost:8000/docs`, Prefect Server at `http://localhost:4200`.
 
+**To enable the CTI benchmark**, also set `CTI_ENABLED=true` in your `.env` file. See [`.env.example`](.env.example) for the full CTI configuration reference.
+
 ## Features
+
+### Garak Security Scanning
 
 - **End-to-end garak ingest pipeline** — Prefect worker spawns garak as a subprocess, tails the JSONL output in real time, and streams results to PostgreSQL
 - **REST API with multi-axis filtering** — filter the leaderboard by probe category, model, and date; full Swagger UI at `/docs`
 - **Leaderboard UI** — filterable table with per-model drill-down showing probe-level breakdowns (Gradio, `localhost:7860` after `docker compose up`)
 - **Manual run triggering** — `POST /api/runs` with a model UUID; the Prefect pipeline picks it up on the next 2-minute poll
 - **Prefect orchestration** — automatic retries, Prefect Server UI at `localhost:4200` after `docker compose up`, SKIP LOCKED for safe concurrent workers
-- **Zero direct cost** — targets OpenRouter free-tier models exclusively; no spend required to run the full probe suite
 - **Docker Compose full-stack deployment** — one command starts API, Prefect Server, Prefect worker, Gradio frontend, and PostgreSQL
-- **10 probe categories** — `encoding`, `dan`, `goodside`, `promptinject`, `malwaregen`, `continuation`, `lmrc`, `leakreplay`, `snowball`, `badchars`
+- **13 probe categories** — `encoding`, `dan`, `goodside`, `promptinject`, `malwaregen`, `continuation`, `lmrc`, `leakreplay`, `snowball`, `badchars`, plus `sysprompt_extraction`, `web_injection`, and expanded DAN sub-probes
+
+### CTI Living Benchmark
+
+The CTI benchmark evaluates how well a model can perform cyber-threat intelligence analysis tasks on real-world, recently-published data. It is designed so that answers cannot be memorised from training data:
+
+- **RCM** — CVE description → CWE weakness classification (set F1 over CWE ids)
+- **VSP** — CVE description → CVSS v3.1 severity vector prediction (base-score MAD)
+- **ATE** — CTI advisory → ATT&CK technique extraction (set F1 over technique ids)
+- **TAA** — Intrusion narrative → threat-actor attribution (alias-aware C/P/I scoring)
+- **Forecast** — CVE description → will-it-be-exploited probability (Brier score + AUC; ground truth resolved by CISA KEV)
+- **SYN** — Reconstructed inputs → concise threat assessment with hedged claims (claim-set recall + faithfulness + calibration); leakage gate enforced at ingest via hybrid masking policy (technique ids and actor names masked from inputs; advisories with unmasked residue dropped)
+
+Key design properties:
+- **Temporal isolation**: items are stamped with their first-availability date; evaluation slices and pre/post-cutoff tags are derived from that anchor so score analysis can separate memorised from generalised knowledge.
+- **Rolling holdout window**: the newest slice of items is withheld from public evaluation for a configurable window (default 14 days) to prevent real-time contamination.
+- **Prequential scoring**: run-level scores use Gama et al. fading-factor averaging so recent items carry more weight.
+- **Bounded and resumable**: each run caps inference calls, commits results incrementally, and resumes cleanly after interruption.
+
+### Relationship to AthenaBench
+
+The task structure draws on [AthenaBench: A Dynamic Benchmark for Evaluating LLMs in Cyber Threat Intelligence](https://arxiv.org/abs/2511.01144) (WAITI Workshop 2025), which defines RCM, VSP, TAA, and ATE as a shared vocabulary for CTI evaluation and demonstrates the value of pulling from live authoritative feeds (NVD, MITRE ATT&CK) rather than static corpora.
+
+Glokta extends and departs from that baseline in several ways:
+
+| Dimension | AthenaBench | Glokta |
+|-----------|-------------|--------|
+| **RCM scoring** | Single-answer accuracy (one CWE per CVE) | Set F1 — models may predict multiple CWE ids; partial credit via precision/recall |
+| **ATE scoring** | Single-technique accuracy | Set F1 over all predicted technique ids against the full label set |
+| **TAA scoring** | Binary accuracy | Synonym-graph C/P/I credit (1.0 / 0.5 / 0.0) via alias expansion and related-group BFS |
+| **Forecast task** | Not present | CVE → exploitation probability scored by Brier loss + ROC AUC; ground truth resolved live by CISA KEV |
+| **SYN task** | Not present | Free-text threat assessment scored by claim-set recall, LLM-judge faithfulness, and hedge calibration |
+| **CKT / RMS tasks** | Multiple-choice knowledge test + risk mitigation strategy | Not included — Glokta focuses on grounded, verifiable outputs rather than recall of reference material |
+| **Leakage control** | Time-window filtering on dataset construction | Per-item `first_available_date` anchor; each result tagged `pre_cutoff` against the model's training cutoff range; rolling holdout window withholds the newest items from evaluation |
+| **Evaluation cadence** | Snapshot dataset (regenerable from APIs) | Continuous stream — new items flow in from live feeds, are withheld, then graduate into the scored slice automatically |
+| **Run-level aggregation** | Uniform average across tasks | Prequential fading-factor average so recent items carry more weight |
+| **Data generation** | CKT questions generated with GPT-5 (acknowledged advantage) | All items derived from public authoritative feeds only — no LLM-generated ground truth |
 
 ## API Reference
 
@@ -34,7 +78,7 @@ Full interactive documentation at **http://localhost:8000/docs** (after `docker 
 | `GET` | `/api/health` | Health check — returns `{"status": "ok"}` |
 | `GET` | `/api/models` | List all registered models |
 | `GET` | `/api/models/{id}` | Get a single model by UUID |
-| `POST` | `/api/runs` | Trigger a new scan job |
+| `POST` | `/api/runs` | Trigger a new garak scan job |
 | `GET` | `/api/runs` | List all runs (filter: `?status=completed&model_id=<uuid>`) |
 | `GET` | `/api/runs/{id}` | Get run status by UUID |
 | `GET` | `/api/leaderboard` | Leaderboard with optional filters |
@@ -63,9 +107,12 @@ glokta/
 │   ├── seed_models.py          # Idempotent model catalogue seeder
 │   ├── trigger_top_models.py   # Manually queue top OpenRouter models
 │   ├── export_to_hf.py         # Export DB → HuggingFace dataset
-│   └── import_from_hf.py       # Import HuggingFace dataset → DB (idempotent merge)
+│   ├── import_from_hf.py       # Import HuggingFace dataset → DB (idempotent merge)
+│   ├── seed_cti_model.py       # Seed a model for CTI benchmark validation
+│   ├── run_cti_smoke.py        # End-to-end CTI smoke run (no Prefect)
+│   └── validate_cti.py         # Validate CTI DB outputs after a smoke run
 ├── src/glokta/
-│   ├── config.py               # Pydantic Settings (env vars)
+│   ├── config.py               # Pydantic Settings (env vars, including CTI knobs)
 │   ├── api/
 │   │   ├── app.py              # FastAPI app factory
 │   │   ├── deps.py             # Dependency injection (database session)
@@ -74,23 +121,52 @@ glokta/
 │   ├── application/            # Business logic services
 │   │   ├── ingest.py           # garak JSONL → DB parsing
 │   │   ├── leaderboard.py      # Leaderboard query logic
-│   │   └── scan_service.py     # Core scanning orchestration
+│   │   ├── scan_service.py     # Core garak scanning orchestration
+│   │   └── cti/
+│   │       ├── eval_service.py       # CTI run execution, queuing, and resume
+│   │       ├── ingest_service.py     # CTI item upsert with temporal invariants
+│   │       ├── forecast_service.py   # KEV upsert, forecast seeding, label resolution
+│   │       ├── reference_service.py  # ATT&CK technique + threat-actor reference upsert
+│   │       ├── scoring_aggregate.py  # Prequential and AUC run-level aggregation
+│   │       └── syn_service.py        # SYN item ingest and pilot gate
 │   ├── domain/                 # Pure business entities
-│   │   └── risks.py            # Risk category definitions and pass rate calculations
+│   │   ├── risks.py            # Garak risk category definitions
+│   │   └── cti/
+│   │       ├── tasks.py        # CTI task registry (RCM/VSP/ATE/TAA/Forecast/SYN)
+│   │       ├── scoring.py      # Pure scoring functions (no DB/network)
+│   │       └── claims.py       # SYN claim-set types and scoring
 │   ├── infrastructure/         # External integrations
 │   │   ├── db/
 │   │   │   ├── session.py      # SQLAlchemy engine, session factory, init_db()
-│   │   │   ├── orm.py          # SQLAlchemy ORM models
+│   │   │   ├── orm.py          # SQLAlchemy ORM models (garak + CTI tables)
 │   │   │   └── repos.py        # Repository pattern for common queries
 │   │   ├── garak/
 │   │   │   └── runner.py       # Subprocess wrapper for garak CLI
 │   │   ├── hf/
 │   │   │   ├── client.py       # HuggingFace model discovery
 │   │   │   └── sync.py         # HF dataset import/export
-│   │   └── openrouter/
-│   │       └── client.py       # OpenRouter model catalogue + cost estimation
+│   │   ├── llm/
+│   │   │   ├── routing.py      # Shared provider routing (OpenRouter/HF, timeouts, thinking suppression)
+│   │   │   └── throttle.py     # Token-bucket rate limiter for CTI inference
+│   │   ├── openrouter/
+│   │   │   └── client.py       # OpenRouter model catalogue + cost estimation
+│   │   └── cti/
+│   │       ├── prompts.py      # Prompt templates and response parsers for all CTI tasks
+│   │       ├── evaluator.py    # Per-item parse + score adapter
+│   │       ├── inference.py    # Direct chat-completions client for CTI inference
+│   │       ├── judge.py        # LLM judge for SYN faithfulness residue
+│   │       ├── claim_extraction.py  # Claim-set extraction for SYN items
+│   │       ├── cutoffs.py      # Curated per-model training cutoff ranges
+│   │       └── connectors/
+│   │           ├── base.py     # NormalisedCtiItem dataclass
+│   │           ├── cve.py      # CVE JSON 5.0 normalisation + delta fetch
+│   │           ├── kev.py      # CISA KEV fetch
+│   │           ├── attack.py   # MITRE ATT&CK bundle fetch + normalisation
+│   │           ├── galaxy.py   # MITRE Galaxy cluster fetch + normalisation
+│   │           └── report.py   # CISA advisory RSS fetch + ATE/TAA normalisation
 │   ├── pipeline/
-│   │   ├── flows.py            # Prefect flows + thin adapter over application services
+│   │   ├── flows.py            # Prefect flows for garak scanning
+│   │   ├── cti_flows.py        # Prefect flows for all CTI ingest and eval tasks
 │   │   └── serve.py            # Standalone serve entrypoint (no Prefect Server)
 │   └── frontend/
 │       └── gradio_app.py       # Gradio dashboard
@@ -100,7 +176,7 @@ glokta/
 │   ├── start-pipeline.sh       # Pipeline startup: wait → deploy → worker start
 │   ├── docker-compose.yml
 │   └── .env.docker
-├── prefect.yaml                # Prefect deployment definitions
+├── prefect.yaml                # Prefect deployment definitions (garak + CTI flows)
 ├── tests/                      # unit + integration tests
 ├── environment.yml
 ├── pyproject.toml

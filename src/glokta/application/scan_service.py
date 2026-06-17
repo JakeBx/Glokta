@@ -108,6 +108,7 @@ def execute_scan(
     probe_prompt_cap: int | None = None,
     parallel_attempts_override: int | None = None,
     scan_timeout_seconds: int | None = None,
+    pf_logger: logging.Logger | None = None,
 ) -> dict:
     """Core garak execution: build config, run, ingest JSONL.
 
@@ -148,6 +149,7 @@ def execute_scan(
             config,
             env_overrides,
             timeout=scan_timeout_seconds or settings.garak_timeout_seconds,
+            pf_logger=pf_logger,
         )
 
         run = RunRepository(db).find_by_id(run_id)
