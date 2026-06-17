@@ -42,13 +42,32 @@ The CTI benchmark evaluates how well a model can perform cyber-threat intelligen
 - **ATE** — CTI advisory → ATT&CK technique extraction (set F1 over technique ids)
 - **TAA** — Intrusion narrative → threat-actor attribution (alias-aware C/P/I scoring)
 - **Forecast** — CVE description → will-it-be-exploited probability (Brier score + AUC; ground truth resolved by CISA KEV)
-- **SYN** — Raw inputs → concise threat assessment with hedged claims (claim-set recall + faithfulness; currently disabled pending leakage-gate pilot)
+- **SYN** — Reconstructed inputs → concise threat assessment with hedged claims (claim-set recall + faithfulness + calibration); leakage gate enforced at ingest via hybrid masking policy (technique ids and actor names masked from inputs; advisories with unmasked residue dropped)
 
 Key design properties:
 - **Temporal isolation**: items are stamped with their first-availability date; evaluation slices and pre/post-cutoff tags are derived from that anchor so score analysis can separate memorised from generalised knowledge.
 - **Rolling holdout window**: the newest slice of items is withheld from public evaluation for a configurable window (default 14 days) to prevent real-time contamination.
 - **Prequential scoring**: run-level scores use Gama et al. fading-factor averaging so recent items carry more weight.
 - **Bounded and resumable**: each run caps inference calls, commits results incrementally, and resumes cleanly after interruption.
+
+### Relationship to AthenaBench
+
+The task structure draws on [AthenaBench: A Dynamic Benchmark for Evaluating LLMs in Cyber Threat Intelligence](https://arxiv.org/abs/2511.01144) (WAITI Workshop 2025), which defines RCM, VSP, TAA, and ATE as a shared vocabulary for CTI evaluation and demonstrates the value of pulling from live authoritative feeds (NVD, MITRE ATT&CK) rather than static corpora.
+
+Glokta extends and departs from that baseline in several ways:
+
+| Dimension | AthenaBench | Glokta |
+|-----------|-------------|--------|
+| **RCM scoring** | Single-answer accuracy (one CWE per CVE) | Set F1 — models may predict multiple CWE ids; partial credit via precision/recall |
+| **ATE scoring** | Single-technique accuracy | Set F1 over all predicted technique ids against the full label set |
+| **TAA scoring** | Binary accuracy | Synonym-graph C/P/I credit (1.0 / 0.5 / 0.0) via alias expansion and related-group BFS |
+| **Forecast task** | Not present | CVE → exploitation probability scored by Brier loss + ROC AUC; ground truth resolved live by CISA KEV |
+| **SYN task** | Not present | Free-text threat assessment scored by claim-set recall, LLM-judge faithfulness, and hedge calibration |
+| **CKT / RMS tasks** | Multiple-choice knowledge test + risk mitigation strategy | Not included — Glokta focuses on grounded, verifiable outputs rather than recall of reference material |
+| **Leakage control** | Time-window filtering on dataset construction | Per-item `first_available_date` anchor; each result tagged `pre_cutoff` against the model's training cutoff range; rolling holdout window withholds the newest items from evaluation |
+| **Evaluation cadence** | Snapshot dataset (regenerable from APIs) | Continuous stream — new items flow in from live feeds, are withheld, then graduate into the scored slice automatically |
+| **Run-level aggregation** | Uniform average across tasks | Prequential fading-factor average so recent items carry more weight |
+| **Data generation** | CKT questions generated with GPT-5 (acknowledged advantage) | All items derived from public authoritative feeds only — no LLM-generated ground truth |
 
 ## API Reference
 
