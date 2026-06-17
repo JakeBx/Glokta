@@ -28,7 +28,7 @@ from glokta.application.cti.reference_service import (
     upsert_threat_actors,
 )
 from glokta.application.cti.syn_service import ingest_syn_items
-from glokta.infrastructure.cti.inference import complete
+from glokta.infrastructure.cti.inference import complete_via_openrouter
 from glokta.config import settings
 from glokta.infrastructure.cti.connectors.attack import (
     fetch_attack_bundle,
@@ -216,7 +216,7 @@ def cti_ingest_syn() -> None:
         result = ingest_syn_items(
             db,
             advisories,
-            judge_infer=complete,
+            judge_infer=complete_via_openrouter,
             mask=True,
             alias_index=alias_index,
             withhold_window_days=settings.cti_withhold_window_days,
@@ -250,7 +250,7 @@ def cti_bootstrap() -> None:
     """One-shot: ingest the recent slice across all connectors, then queue + drain CTI runs.
 
     Runs connectors in dependency order (reference tables first), applies cutoffs, queues runs
-    for the enabled non-SYN tasks, and drains them inline. For a live small-slice dry run.
+    for all six tasks, and drains them inline (tolerating individual run failures).
     """
     if not settings.cti_enabled:
         logger.warning("cti_bootstrap: CTI disabled (set CTI_ENABLED=true)")
@@ -271,19 +271,34 @@ def cti_bootstrap() -> None:
             db, tasks=["rcm", "vsp", "ate", "taa", "forecast", "syn"], scan_ttl_days=0
         )
         logger.info("cti_bootstrap: queued=%s", queued)
-        guard = 0
-        while (
-            db.query(CtiRun).filter(CtiRun.status == "pending").count() > 0
-            and guard < 10000
-        ):
-            process_pending_cti_run(
-                db,
-                lambda rid, mname, task_name: execute_cti_run(rid, mname, task_name, db),
-            )
-            guard += 1
-        logger.info("cti_bootstrap: drained %d runs", guard)
+        stats = _drain_pending_runs(
+            db, lambda rid, mname, task_name: execute_cti_run(rid, mname, task_name, db)
+        )
+        logger.info("cti_bootstrap: drain %s", stats)
     finally:
         db.close()
+
+
+def _drain_pending_runs(db, run_fn, *, max_iterations: int = 10000) -> dict:
+    """Drain pending CTI runs inline, tolerating individual run failures.
+
+    A single run that raises (e.g. a provider 504/timeout) is already marked ``failed`` by
+    ``process_pending_cti_run``; we log it and continue so one bad model/endpoint can't abort the
+    whole backfill. Returns drained/failed counts.
+    """
+    drained = failed = 0
+    while (
+        db.query(CtiRun).filter(CtiRun.status == "pending").count() > 0
+        and drained < max_iterations
+    ):
+        try:
+            process_pending_cti_run(db, run_fn)
+        except Exception as exc:  # noqa: BLE001 - keep draining the remaining runs
+            failed += 1
+            logger.warning("cti_bootstrap: run failed, continuing drain: %s", exc)
+            db.rollback()
+        drained += 1
+    return {"drained": drained, "failed": failed}
 
 
 @flow(name="cti-trigger", log_prints=True)

@@ -52,12 +52,31 @@ class ProviderRoute:
     suppress_thinking: bool  # disable thinking mode for this model on this provider
 
 
-def resolve_route(model_name: str) -> ProviderRoute:
+def _openrouter_route(raw_model: str) -> ProviderRoute:
+    return ProviderRoute(
+        provider="openrouter",
+        raw_model=raw_model,
+        uri=_OPENROUTER_URI,
+        key_env_var="OPENROUTER_API_KEY",
+        generator_name=_OPENROUTER_GENERATOR_NAME,
+        request_timeout=_OPENROUTER_REQUEST_TIMEOUT,
+        suppress_thinking=False,
+    )
+
+
+def resolve_route(model_name: str, *, force_provider: str | None = None) -> ProviderRoute:
     """Resolve the provider route for a ``"<source>/<id>"`` glokta model name.
 
     Anything not prefixed ``huggingface/`` routes to OpenRouter (the historical default).
+    ``force_provider="openrouter"`` pins the OpenRouter route regardless of the name's prefix
+    (used for the CTI judge, which must always go through OpenRouter); any ``huggingface/`` or
+    ``openrouter/`` source prefix is stripped from the model id.
     Thinking suppression is applied for HF serverless only, matching prior garak behaviour.
     """
+    if force_provider == "openrouter":
+        raw_model = model_name.removeprefix("huggingface/").removeprefix("openrouter/")
+        return _openrouter_route(raw_model)
+
     if model_name.startswith("huggingface/"):
         raw_model = model_name.removeprefix("huggingface/")
         return ProviderRoute(
@@ -70,16 +89,7 @@ def resolve_route(model_name: str) -> ProviderRoute:
             suppress_thinking=is_thinking_model(raw_model),
         )
 
-    raw_model = model_name.removeprefix("openrouter/")
-    return ProviderRoute(
-        provider="openrouter",
-        raw_model=raw_model,
-        uri=_OPENROUTER_URI,
-        key_env_var="OPENROUTER_API_KEY",
-        generator_name=_OPENROUTER_GENERATOR_NAME,
-        request_timeout=_OPENROUTER_REQUEST_TIMEOUT,
-        suppress_thinking=False,
-    )
+    return _openrouter_route(model_name.removeprefix("openrouter/"))
 
 
 def build_request_body(

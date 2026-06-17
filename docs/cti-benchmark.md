@@ -62,7 +62,11 @@ fuzzy).
   `huggingface/…` → HF router; everything else → OpenRouter.
 - **Inference** ([inference.py](../src/glokta/infrastructure/cti/inference.py)) — `complete()`,
   one prompt → one completion, with 429/5xx retry. Paced by a `RateLimiter`
-  ([throttle.py](../src/glokta/infrastructure/llm/throttle.py)) at `cti_rpm_limit`.
+  ([throttle.py](../src/glokta/infrastructure/llm/throttle.py)) at `cti_rpm_limit`. The SYN
+  faithfulness **judge always routes via OpenRouter** (`complete_via_openrouter`, i.e.
+  `resolve_route(..., force_provider="openrouter")`), independent of the model-under-test's
+  provider, so `CTI_JUDGE_MODEL` must be a valid OpenRouter slug (default
+  `anthropic/claude-opus-4.8`).
 - **Prompts** ([prompts.py](../src/glokta/infrastructure/cti/prompts.py)) — per-task templates +
   answer extractors (ported from athenabench: strip "Answer:" → scan bottom-to-top → per-task
   regex). Model input is capped at 8 K chars; each result stores a `prompt_hash` (SHA256) for
@@ -213,7 +217,7 @@ All settings live in [config.py](../src/glokta/config.py) (env-overridable; copy
 | `CTI_RPM_LIMIT` | `600` | Inference pacing |
 | `CTI_PREQUENTIAL_FADING_FACTOR` | `0.99` | Gama recency weighting |
 | `CTI_WITHHOLD_WINDOW_DAYS` | `14` | Newest-slice raw-text holdout window |
-| `CTI_JUDGE_MODEL` | `claude-opus-4-8` | LLM judge for SYN faithfulness |
+| `CTI_JUDGE_MODEL` | `anthropic/claude-opus-4.8` | LLM judge for SYN faithfulness |
 | `CTI_DATA_DIR` | `/tmp/glokta-cti` | Clone path for the `git_sync` fallback |
 
 ---
@@ -281,7 +285,7 @@ produces a scored row even when live advisory parsing isn't production-ready.
 - **`detect_actor` precision.** Greedy substring matching over 1000+ galaxy aliases can mis-pick the
   TAA label; it needs word-boundary / priority matching.
 - **SYN faithfulness depends on the judge endpoint.** The faithfulness check needs a reachable
-  `CTI_JUDGE_MODEL` (`claude-opus-4-8`); without it, recall + calibration still score but
+  `CTI_JUDGE_MODEL` (`anthropic/claude-opus-4.8`); without it, recall + calibration still score but
   faithfulness is `None`. The leakage gate is enforced at ingest via masking + drop-residue.
 - **Cutoffs are curated estimates.** The map in `cutoffs.py` should be refined as vendors publish
   training-cutoff details.

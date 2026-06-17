@@ -10,7 +10,7 @@ from typing import Callable
 
 from glokta.config import settings
 from glokta.domain.cti.claims import Claim
-from glokta.infrastructure.cti.inference import complete
+from glokta.infrastructure.cti.inference import complete_via_openrouter
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +25,14 @@ _JUDGE_PROMPT = (
 
 def make_grounding_judge(
     *,
-    infer: Callable[..., str] = complete,
+    infer: Callable[..., str] = complete_via_openrouter,
     model: str | None = None,
 ) -> Callable[[Claim, str], bool]:
     """Build a faithfulness judge ``judge(claim, inputs) -> bool``.
 
     The returned callable asks the judge model whether a claim is grounded in the inputs and
-    parses a YES/NO answer (defaulting to not-grounded on an ambiguous reply).
+    parses a YES/NO answer (defaulting to not-grounded on an ambiguous reply). Inference defaults
+    to ``complete_via_openrouter`` so the judge always routes through OpenRouter.
     """
     judge_model = model or settings.cti_judge_model
 

@@ -1,12 +1,14 @@
 """
 Glokta Gradio Dashboard — read-only security leaderboard UI.
 
-Five tabs:
+Seven tabs:
   1. Risk Leaderboard — risk-weighted pass rates; click a row to drill into Probe Results
   2. Probe Results   — raw probe-level data (original leaderboard view)
   3. Compare         — overall pass rate across multiple models over time
   4. Run Status      — per-model scan status
   5. Run Detail      — per-run probe results and raw JSONL output
+  6. CTI Leaderboard — model × task matrix of prequential scores
+  7. CTI Model Detail — per-task drill-down for a single model
 """
 
 import json
@@ -234,6 +236,84 @@ def fetch_attempts_json(run_id: str | None, probe_name: str | None) -> str:
     if not data:
         return json.dumps({"message": "No attempts found"}, indent=2)
     return json.dumps(data, indent=2, default=str)
+
+
+_CTI_TASKS = ["rcm", "vsp", "ate", "taa", "forecast", "syn"]
+_CTI_TASK_LABELS = {
+    "rcm": "RCM",
+    "vsp": "VSP",
+    "ate": "ATE",
+    "taa": "TAA",
+    "forecast": "Forecast",
+    "syn": "SYN",
+}
+_CTI_LEADERBOARD_COLS = ["Model", "Provider"] + [_CTI_TASK_LABELS[t] for t in _CTI_TASKS] + ["Overall"]
+_CTI_MODEL_COLS = ["Task", "Score", "Items", "Scored", "Completed", "AUC"]
+_CTI_RESULT_COLS = ["Item", "Score", "Correct", "Pre-Cutoff", "Breakdown"]
+
+
+def fetch_cti_leaderboard() -> pd.DataFrame:
+    empty = pd.DataFrame(columns=_CTI_LEADERBOARD_COLS)
+    data = _get("/api/cti/leaderboard")
+    if not data or not isinstance(data, dict) or not data.get("models"):
+        return empty
+    rows = []
+    for m in data["models"]:
+        tasks = m.get("tasks", {})
+        row: dict = {"Model": m["model_name"], "Provider": m["provider"]}
+        for task in _CTI_TASKS:
+            label = _CTI_TASK_LABELS[task]
+            ts = tasks.get(task)
+            if ts and ts.get("prequential_score") is not None:
+                row[label] = f"{ts['prequential_score']:.1%}"
+            else:
+                row[label] = "—"
+        overall = m.get("overall")
+        row["Overall"] = f"{overall:.1%}" if overall is not None else "—"
+        rows.append(row)
+    return pd.DataFrame(rows, columns=_CTI_LEADERBOARD_COLS) if rows else empty
+
+
+def fetch_cti_model_runs(model_id: str) -> pd.DataFrame:
+    empty = pd.DataFrame(columns=_CTI_MODEL_COLS)
+    if not model_id:
+        return empty
+    data = _get(f"/api/cti/model/{model_id}")
+    if not data or not isinstance(data, dict) or not data.get("runs"):
+        return empty
+    rows = []
+    for r in data["runs"]:
+        score = r.get("prequential_score")
+        auc = r.get("auc")
+        completed = (r.get("completed_at") or "")[:19].replace("T", " ") or "—"
+        rows.append({
+            "Task": _CTI_TASK_LABELS.get(r["task"], r["task"]),
+            "Score": f"{score:.1%}" if score is not None else "—",
+            "Items": r.get("item_count", 0),
+            "Scored": r.get("scored_count", 0),
+            "Completed": completed,
+            "AUC": f"{auc:.3f}" if auc is not None else "—",
+        })
+    return pd.DataFrame(rows, columns=_CTI_MODEL_COLS) if rows else empty
+
+
+def fetch_cti_run_results(run_id: str | None) -> pd.DataFrame:
+    empty = pd.DataFrame(columns=_CTI_RESULT_COLS)
+    if not run_id:
+        return empty
+    data = _get(f"/api/cti/runs/{run_id}/results")
+    if not data or not isinstance(data, list):
+        return empty
+    rows = []
+    for r in data:
+        rows.append({
+            "Item": str(r["item_id"])[:8],
+            "Score": f"{r['score']:.3f}" if r.get("score") is not None else "—",
+            "Correct": "✓" if r.get("correct") else ("✗" if r.get("correct") is False else "—"),
+            "Pre-Cutoff": "yes" if r.get("pre_cutoff") else ("no" if r.get("pre_cutoff") is False else "—"),
+            "Breakdown": r.get("score_summary", ""),
+        })
+    return pd.DataFrame(rows, columns=_CTI_RESULT_COLS) if rows else empty
 
 
 # ---------------------------------------------------------------------------
@@ -478,6 +558,50 @@ def build_app() -> gr.Blocks:
                     interactive=False,
                 )
 
+            # ----------------------------------------------------------------
+            # Tab 6: CTI Leaderboard
+            # ----------------------------------------------------------------
+            with gr.Tab("CTI Leaderboard", id="cti_leaderboard") as cti_leaderboard_tab:
+                gr.Markdown(
+                    "Prequential (fading-factor weighted) accuracy per task. "
+                    "**Click a row to drill into CTI Model Detail.**"
+                )
+                cti_refresh_btn = gr.Button("Refresh", variant="secondary")
+                cti_leaderboard_table = gr.Dataframe(
+                    label="CTI Leaderboard",
+                    interactive=False,
+                    wrap=True,
+                )
+
+            # ----------------------------------------------------------------
+            # Tab 7: CTI Model Detail
+            # ----------------------------------------------------------------
+            with gr.Tab("CTI Model Detail", id="cti_model_detail") as cti_model_detail_tab:
+                gr.Markdown(
+                    "Select a model to see its latest prequential score per task. "
+                    "**Click a task row to inspect individual item results.**"
+                )
+                cti_model_dropdown = gr.Dropdown(
+                    label="Model",
+                    choices=[],
+                    value=None,
+                    interactive=True,
+                )
+                cti_model_table = gr.Dataframe(
+                    label="Task Scores (click a row to see results)",
+                    interactive=False,
+                    wrap=True,
+                )
+                gr.Markdown("### Item Results")
+                cti_result_table = gr.Dataframe(
+                    label="Per-Item Results",
+                    interactive=False,
+                    wrap=True,
+                )
+
+        # CTI state: parallel list of run_ids for cti_model_table rows
+        cti_task_run_ids = gr.State(value=[])
+
         # --------------------------------------------------------------------
         # Event handlers
         # --------------------------------------------------------------------
@@ -491,6 +615,7 @@ def build_app() -> gr.Blocks:
             risk_df = fetch_risk_leaderboard(_RISK_CHECKBOX_DEFAULT)
             summary_df = fetch_run_summary()
             runs_df = fetch_runs("All")
+            cti_lb_df = fetch_cti_leaderboard()
             return (
                 gr.update(choices=categories, value="All"),           # category_filter
                 gr.update(choices=model_choices_with_all, value=""),  # model_filter
@@ -500,6 +625,8 @@ def build_app() -> gr.Blocks:
                 gr.update(choices=models, value=[]),                  # compare_models
                 summary_df,                                            # run_summary_table
                 runs_df,                                               # runs_table
+                cti_lb_df,                                             # cti_leaderboard_table
+                gr.update(choices=models, value=None),                 # cti_model_dropdown
             )
 
         def on_probe_filter_change(probe_category: str, model_id: str):
@@ -570,6 +697,53 @@ def build_app() -> gr.Blocks:
                 return "", ""
             return probe_name, fetch_attempts_json(run_id, probe_name)
 
+        def on_cti_model_change(model_id: str | None):
+            empty_df = pd.DataFrame(columns=_CTI_MODEL_COLS)
+            empty_results = pd.DataFrame(columns=_CTI_RESULT_COLS)
+            if not model_id:
+                return empty_df, [], empty_results
+            data = _get(f"/api/cti/model/{model_id}")
+            if not data or not isinstance(data, dict) or not data.get("runs"):
+                return empty_df, [], empty_results
+            rows = []
+            run_ids: list[str] = []
+            for r in data["runs"]:
+                score = r.get("prequential_score")
+                auc = r.get("auc")
+                completed = (r.get("completed_at") or "")[:19].replace("T", " ") or "—"
+                rows.append({
+                    "Task": _CTI_TASK_LABELS.get(r["task"], r["task"]),
+                    "Score": f"{score:.1%}" if score is not None else "—",
+                    "Items": r.get("item_count", 0),
+                    "Scored": r.get("scored_count", 0),
+                    "Completed": completed,
+                    "AUC": f"{auc:.3f}" if auc is not None else "—",
+                })
+                run_ids.append(r["run_id"])
+            df = pd.DataFrame(rows, columns=_CTI_MODEL_COLS) if rows else empty_df
+            return df, run_ids, empty_results
+
+        def on_cti_task_select(evt: gr.SelectData, run_ids: list[str]):
+            try:
+                run_id = run_ids[evt.index[0]]
+            except (IndexError, TypeError):
+                return pd.DataFrame(columns=_CTI_RESULT_COLS)
+            return fetch_cti_run_results(run_id)
+
+        def on_cti_lb_row_click(
+            evt: gr.SelectData, cti_lb_df: pd.DataFrame, name_to_id: dict
+        ):
+            """Set CTI model dropdown and switch to CTI Model Detail tab."""
+            try:
+                model_name = str(cti_lb_df.iloc[evt.index[0]]["Model"])
+            except Exception:
+                return gr.update(), gr.update()
+            model_id = name_to_id.get(model_name, "")
+            return (
+                gr.update(value=model_id),               # cti_model_dropdown
+                gr.update(selected="cti_model_detail"),  # tabs → switch tab
+            )
+
         # --------------------------------------------------------------------
         # Wire events
         # --------------------------------------------------------------------
@@ -582,6 +756,7 @@ def build_app() -> gr.Blocks:
                 risk_table, model_name_to_id,
                 compare_models,
                 run_summary_table, runs_table,
+                cti_leaderboard_table, cti_model_dropdown,
             ],
         )
 
@@ -636,6 +811,31 @@ def build_app() -> gr.Blocks:
         )
         status_filter.change(fn=fetch_runs, inputs=[status_filter], outputs=[runs_table])
         runs_refresh_btn.click(fn=fetch_runs, inputs=[status_filter], outputs=[runs_table])
+
+        # CTI Leaderboard tab
+        cti_refresh_btn.click(fn=fetch_cti_leaderboard, inputs=None, outputs=[cti_leaderboard_table])
+        cti_leaderboard_table.select(
+            fn=on_cti_lb_row_click,
+            inputs=[cti_leaderboard_table, model_name_to_id],
+            outputs=[cti_model_dropdown, tabs],
+        )
+
+        # CTI Model Detail tab
+        cti_model_dropdown.change(
+            fn=on_cti_model_change,
+            inputs=[cti_model_dropdown],
+            outputs=[cti_model_table, cti_task_run_ids, cti_result_table],
+        )
+        cti_model_detail_tab.select(
+            fn=on_cti_model_change,
+            inputs=[cti_model_dropdown],
+            outputs=[cti_model_table, cti_task_run_ids, cti_result_table],
+        )
+        cti_model_table.select(
+            fn=on_cti_task_select,
+            inputs=[cti_task_run_ids],
+            outputs=[cti_result_table],
+        )
 
     return demo
 

@@ -248,6 +248,32 @@ class CtiRunRepository:
             .all()
         )
 
+    def latest_complete_per_task_all_models(self) -> list[CtiRun]:
+        """Most recent complete run per (model_id, task) across all models."""
+        rows = (
+            self._db.query(CtiRun)
+            .filter(CtiRun.status == "complete")
+            .order_by(CtiRun.model_id, CtiRun.task, CtiRun.completed_at.desc())
+            .all()
+        )
+        seen: set[tuple] = set()
+        result: list[CtiRun] = []
+        for row in rows:
+            key = (row.model_id, row.task)
+            if key not in seen:
+                seen.add(key)
+                result.append(row)
+        return result
+
+    def complete_for_model(self, model_id: uuid.UUID) -> list[CtiRun]:
+        """All complete runs for one model across all tasks, newest first."""
+        return (
+            self._db.query(CtiRun)
+            .filter(CtiRun.model_id == model_id, CtiRun.status == "complete")
+            .order_by(CtiRun.task, CtiRun.completed_at.desc())
+            .all()
+        )
+
 
 class CtiResultRepository:
     def __init__(self, session: Session) -> None:

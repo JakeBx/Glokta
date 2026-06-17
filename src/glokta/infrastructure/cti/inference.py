@@ -92,14 +92,16 @@ def complete(
     max_retries: int = 3,
     backoff_seconds: float = 1.0,
     client: _HttpClient | None = None,
+    provider: str | None = None,
 ) -> str:
     """Run one chat-completion and return the message content.
 
     ``client`` may be injected (tests / connection reuse); otherwise a short-lived
     ``httpx.Client`` is created and closed. ``api_key`` defaults to the settings value
-    for the resolved provider.
+    for the resolved provider. ``provider="openrouter"`` pins the OpenRouter route regardless
+    of the model name's source prefix (used for the CTI judge).
     """
-    route = resolve_route(model_name)
+    route = resolve_route(model_name, force_provider=provider)
     key = api_key if api_key is not None else _default_key(route.key_env_var)
 
     messages: list[dict] = []
@@ -128,4 +130,27 @@ def complete(
         if owns_client:
             active.close()
 
-    return _extract_content(resp.json())
+    # A non-2xx reply (e.g. a 504 that outlived its retries) or a non-JSON body must surface as a
+    # clean InferenceError — not an opaque JSONDecodeError from resp.json() that aborts the caller.
+    if resp.status_code >= 400:
+        snippet = (getattr(resp, "text", "") or "")[:200]
+        raise InferenceError(
+            f"Provider returned HTTP {resp.status_code} for {route.raw_model!r}: {snippet!r}"
+        )
+    try:
+        data = resp.json()
+    except ValueError as exc:  # json.JSONDecodeError is a ValueError subclass
+        snippet = (getattr(resp, "text", "") or "")[:200]
+        raise InferenceError(
+            f"Non-JSON response (HTTP {resp.status_code}) for {route.raw_model!r}: {snippet!r}"
+        ) from exc
+    return _extract_content(data)
+
+
+def complete_via_openrouter(model_name: str, prompt: str, **kwargs: Any) -> str:
+    """Run a completion forcing the OpenRouter provider.
+
+    Used for the CTI judge so the judge model (``cti_judge_model``) always routes through the
+    OpenRouter client and key, independent of the model-under-test's provider.
+    """
+    return complete(model_name, prompt, provider="openrouter", **kwargs)
